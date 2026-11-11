@@ -149,6 +149,13 @@ class HeatpumpSnapshot:
         return round(supply - self.return_temp, 2)
 
     @property
+    def lead_supply_temp(self) -> float | None:
+        """Appliance flow used to match requesting circuits."""
+        if self.appliance_supply_temp is not None:
+            return self.appliance_supply_temp
+        return self.supply_temp
+
+    @property
     def requesting_circuits(self) -> list[str]:
         """Circuits whose actual supply matches the appliance supply.
 
@@ -157,10 +164,11 @@ class HeatpumpSnapshot:
         """
         if not self.compressor_on:
             return []
+        lead = self.lead_supply_temp
         return [
             c.circuit_id
             for c in self.circuits
-            if c.matches_appliance_supply(self.appliance_supply_temp)
+            if c.matches_appliance_supply(lead)
         ]
 
     @property
@@ -331,30 +339,30 @@ def _is_scalar(value: Any) -> bool:
 
 
 def _path_value(index: dict[str, Any], *suffixes: str) -> Any:
-    """Return matching scalar; prefer exact live path over recordings suffix."""
-    exact_recording: Any = None
-    suffix_live: Any = None
-    for path, value in index.items():
-        if not _is_scalar(value):
-            continue
-        norm = path.lstrip("/")
-        recording = norm.startswith("recordings/")
-        for suffix in suffixes:
-            clean = suffix.lstrip("/")
+    """Return matching scalar; suffixes are tried in priority order."""
+    for suffix in suffixes:
+        clean = suffix.lstrip("/")
+        exact_recording: Any = None
+        suffix_live: Any = None
+        for path, value in index.items():
+            if not _is_scalar(value):
+                continue
+            norm = path.lstrip("/")
+            recording = norm.startswith("recordings/")
             if norm == clean:
                 if recording:
                     if exact_recording is None:
                         exact_recording = value
                 else:
                     return value
-            elif norm.endswith(clean):
-                if recording:
-                    continue
+            elif norm.endswith(clean) and not recording:
                 if suffix_live is None:
                     suffix_live = value
-    if suffix_live is not None:
-        return suffix_live
-    return exact_recording
+        if suffix_live is not None:
+            return suffix_live
+        if exact_recording is not None:
+            return exact_recording
+    return None
 
 
 def _latest_hour_value(value: Any) -> float | None:
@@ -440,7 +448,11 @@ def build_snapshot_from_path_map(path_values: dict[str, Any]) -> HeatpumpSnapsho
         )
         or 0.0,
         appliance_supply_temp=_as_float(
-            _path_value(index, "heatSources/applianceSupplyTemperature")
+            _path_value(
+                index,
+                "heatSources/applianceSupplyTemperature",
+                "system/appliance/actualSupplyTemperature",
+            )
         ),
         hs1_modulation=_as_float(
             _path_value(index, "heatSources/hs1/actualModulation")
@@ -449,6 +461,7 @@ def build_snapshot_from_path_map(path_values: dict[str, Any]) -> HeatpumpSnapsho
         supply_temp=_as_float(
             _path_value(
                 index,
+                "system/appliance/actualSupplyTemperature",
                 "heatSources/actualSupplyTemperature",
                 "system/sensors/temperatures/supply_t1",
             )
@@ -456,8 +469,8 @@ def build_snapshot_from_path_map(path_values: dict[str, Any]) -> HeatpumpSnapsho
         return_temp=_as_float(
             _path_value(
                 index,
-                "heatSources/returnTemperature",
                 "system/sensors/temperatures/return",
+                "heatSources/returnTemperature",
             )
         ),
         outdoor_temp=_as_float(
@@ -542,6 +555,7 @@ _SOURCE_MARKERS = (
     "applianceSupplyTemperature",
     "actualSupplyTemperature",
     "returnTemperature",
+    "temperatures/return",
     "outdoor_t1",
     "dhw1/charge",
     "dhw1/actualTemp",

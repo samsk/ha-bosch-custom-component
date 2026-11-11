@@ -128,6 +128,26 @@ def test_primary_prefers_non_hc1_when_both_request() -> None:
     assert snap.primary_circuit == "hc2"
 
 
+def test_ivt_system_appliance_supply_path() -> None:
+    """RC300 uses system/appliance/actualSupplyTemperature, not heatSources/."""
+    data = _standby()
+    del data["heatSources/applianceSupplyTemperature"]
+    del data["heatSources/actualSupplyTemperature"]
+    data["heatSources/actualModulation"] = 60
+    data["system/appliance/actualSupplyTemperature"] = 46.6
+    data["system/sensors/temperatures/return"] = 41.6
+    data["heatingCircuits/hc1/supplyTemperatureSetpoint"] = 31
+    data["heatingCircuits/hc1/actualSupplyTemperature"] = 46.7
+    data["heatingCircuits/hc2/supplyTemperatureSetpoint"] = 30
+    data["heatingCircuits/hc2/actualSupplyTemperature"] = 28.2
+    data["heatingCircuits/hc2/pumpModulation"] = 100
+    snap = hp.build_snapshot_from_path_map(data)
+    assert snap.lead_supply_temp == 46.6
+    assert snap.requesting_circuits == ["hc1"]
+    assert snap.primary_circuit == "hc1"
+    assert snap.heat_source_delta == 5.0
+
+
 def test_requestors_can_overlap() -> None:
     """DHW setpoint, matching circuits, and pool are independent requestors."""
     data = _standby()
