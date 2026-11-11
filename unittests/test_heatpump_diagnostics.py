@@ -106,9 +106,26 @@ def test_aku_buffer_matches_actual_not_setpoint() -> None:
     snap = hp.build_snapshot_from_path_map(data)
     assert snap.requesting_circuits == ["hc1"]
     assert snap.heat_requestors == ["dhw", "hc1"]
+    assert snap.primary_circuit == "hc1"
     assert snap.heat_source_delta == 3.9
     # charge=stop: requestors include dhw, mode uses charging only
     assert hp.classify_heatpump_mode(snap) == "space_heating"
+
+
+def test_primary_prefers_non_hc1_when_both_request() -> None:
+    """hc1 buffer follows; non-hc1 with same supply match is primary."""
+    data = _standby()
+    data["heatSources/actualModulation"] = 60
+    data["heatSources/applianceSupplyTemperature"] = 30.0
+    data["heatingCircuits/hc1/supplyTemperatureSetpoint"] = 32
+    data["heatingCircuits/hc1/actualSupplyTemperature"] = 30.1
+    data["heatingCircuits/hc1/pumpModulation"] = 0
+    data["heatingCircuits/hc2/supplyTemperatureSetpoint"] = 30
+    data["heatingCircuits/hc2/actualSupplyTemperature"] = 29.9
+    data["heatingCircuits/hc2/pumpModulation"] = 100
+    snap = hp.build_snapshot_from_path_map(data)
+    assert set(snap.requesting_circuits) == {"hc1", "hc2"}
+    assert snap.primary_circuit == "hc2"
 
 
 def test_requestors_can_overlap() -> None:

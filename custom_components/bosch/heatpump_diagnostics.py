@@ -186,7 +186,26 @@ class HeatpumpSnapshot:
 
     @property
     def primary_circuit(self) -> str | None:
-        """Circuit with highest pump modulation."""
+        """Leading heat demand circuit, else highest pump modulation.
+
+        Prefer circuits whose actual supply matches the appliance. hc1 is
+        often a buffer/tank that follows another circuit's flow; if any
+        non-hc1 circuit is also requesting, pick among those instead.
+        """
+        requesting = self.requesting_circuits
+        if requesting:
+            by_id = {c.circuit_id: c for c in self.circuits}
+            matched = [by_id[cid] for cid in requesting if cid in by_id]
+            leaders = [c for c in matched if c.circuit_id != "hc1"]
+            pool = leaders if leaders else matched
+            if pool:
+                best = max(
+                    pool,
+                    key=lambda c: (
+                        c.pump_modulation if c.pump_modulation is not None else -1.0
+                    ),
+                )
+                return best.circuit_id
         if not self.circuits:
             return None
         best = max(

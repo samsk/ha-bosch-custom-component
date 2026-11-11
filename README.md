@@ -116,7 +116,7 @@ Requestors can overlap. `dhw` when DHW setpoint is not 0; a circuit when the com
 - **Space heating active** — at least one circuit requests heat
 - **Heating circuits requesting** — count of matching circuits
 - **Heat requestors** — comma list, e.g. `dhw,hc2,pool`
-- **Primary heating circuit** — highest pump modulation
+- **Primary heating circuit** — requesting circuit (appliance supply match); if hc1 (buffer) and another HC both match, prefer the non-hc1; else highest pump modulation
 - **hcN requesting heat** — one binary sensor per heating circuit
 - **hcN room sensor fault** — room temperature at or below −50 °C (one per circuit)
 - **Heat source delta** — supply minus return (°C)
