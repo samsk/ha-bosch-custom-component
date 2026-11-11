@@ -22,7 +22,9 @@ from ..heatpump_diagnostics import (
     build_snapshot_from_gateway,
     classify_efficiency_hint,
     classify_heatpump_mode,
+    heatpump_source_objects,
     heating_circuit_ids,
+    is_recording_source,
 )
 
 if TYPE_CHECKING:
@@ -41,6 +43,27 @@ MODE_OPTIONS = [
     "pool_and_heating",
     "circulation",
 ]
+
+_kicked_recordings: set[int] = set()
+
+
+class _HeatpumpRecordingPull:
+    """Hourly fetch for a recording object used by virtual sensors."""
+
+    enabled = True
+
+    def __init__(self, obj: Any) -> None:
+        """Wrap one Bosch recording object."""
+        self.bosch_object = obj
+        self.statistic_id = f"heatpump_diag:{getattr(obj, 'attr_id', 'rec')}"
+
+    async def async_update_recording(self) -> None:
+        """No HA statistic write; snapshot reads the object."""
+        return None
+
+    async def insert_statistics_range(self, start_time: Any) -> None:
+        """Unused; protocol compatibility."""
+        return None
 
 
 class _HeatpumpVirtualBase(CoordinatorEntity):
@@ -65,6 +88,8 @@ class _HeatpumpVirtualBase(CoordinatorEntity):
         self._key = key
         self._attr_name = name
         self._attr_unique_id = f"HeatpumpDiag{key}{uuid}"
+        self._regular_sources: list[Any] = []
+        self._recording_sources: list[_HeatpumpRecordingPull] = []
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -78,14 +103,59 @@ class _HeatpumpVirtualBase(CoordinatorEntity):
             info["via_device_id"] = self.coordinator.gateway_device_id
         return info
 
-    def _snapshot(self) -> HeatpumpSnapshot | None:
+    async def async_added_to_hass(self) -> None:
+        """Poll the gateway paths this snapshot needs."""
+        await super().async_added_to_hass()
+        for obj in heatpump_source_objects(self._gateway):
+            if is_recording_source(obj):
+                wrapper = _HeatpumpRecordingPull(obj)
+                self.coordinator.register_recording_entity(wrapper)
+                self._recording_sources.append(wrapper)
+            else:
+                self.coordinator.register_object(obj)
+                self._regular_sources.append(obj)
+        await self.coordinator.async_request_refresh()
+        self._kick_recording_fetch()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Stop polling snapshot sources when this entity is disabled."""
+        for obj in self._regular_sources:
+            self.coordinator.unregister_object(obj)
+        self._regular_sources = []
+        for wrapper in self._recording_sources:
+            self.coordinator.unregister_recording_entity(wrapper)
+        self._recording_sources = []
+        if not self.coordinator.recording_entities:
+            _kicked_recordings.discard(id(self.coordinator))
+        await super().async_will_remove_from_hass()
+
+    def _kick_recording_fetch(self) -> None:
+        """Run one recording pull now; later ones stay on the hourly slot."""
+        if not self._recording_sources:
+            return
+        key = id(self.coordinator)
+        if key in _kicked_recordings:
+            return
+        _kicked_recordings.add(key)
+        self.hass.async_create_task(self.coordinator.async_recording_sensors_update())
+
+    def _snapshot(self) -> HeatpumpSnapshot:
         """Rebuild snapshot from gateway objects."""
         return build_snapshot_from_gateway(self._gateway)
 
     @property
     def available(self) -> bool:
-        """Available when a heatpump snapshot can be built."""
-        return self._snapshot() is not None
+        """Available after a successful refresh with live gateway values."""
+        if not self.coordinator.last_update_success:
+            return False
+        snap = self._snapshot()
+        return bool(
+            snap.hs_type
+            or snap.appliance_supply_temp is not None
+            or snap.supply_temp is not None
+            or snap.circuits
+            or snap.dhw_setpoint is not None
+        )
 
 
 class HeatpumpModeSensor(_HeatpumpVirtualBase, SensorEntity):
@@ -204,14 +274,14 @@ def build_heatpump_virtual_entities(
 ) -> list[Any]:
     """Create all virtual heat-pump entities (disabled by default).
 
-    Registers even when the live snapshot is not Heatpump yet, so entities
-    show up after the option is enabled. They stay unavailable until the
-    gateway reports a heat-pump type.
+    Enabled entities register the gateway paths they read and fill on the
+    next coordinator refresh. COP / last-hour wait for the hourly recording
+    pull.
     """
     snap = build_snapshot_from_gateway(gateway)
-    if snap is None:
-        _LOGGER.warning(
-            "Heat-pump diagnostics registered, but hs1/type is not Heatpump yet"
+    if not snap.is_heatpump:
+        _LOGGER.debug(
+            "Heat-pump diagnostics registered; hs1/type not Heatpump yet"
         )
 
     entities: list[Any] = [

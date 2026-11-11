@@ -162,3 +162,140 @@ def test_water_flow_does_not_mean_charging() -> None:
     snap = hp.build_snapshot_from_path_map(data)
     assert snap.dhw_charging is False
     assert snap.dhw_requested is True
+
+
+class _FakeObj:
+    """Bosch-like object with path, get_property, and nested _data."""
+
+    def __init__(
+        self,
+        path: str,
+        attr_id: str,
+        *,
+        value=None,
+        nested=None,
+        kind: str = "regular",
+        name: str = "x",
+    ):
+        self.path = path
+        self.attr_id = attr_id
+        self.kind = kind
+        self.name = name
+        self.sensors = []
+        if nested is not None:
+            self._data = nested
+            self.state = False
+        else:
+            result = {"value": value} if value is not None else {}
+            self._data = {attr_id: {"result": result, "uri": path, "type": kind}}
+            self.state = "unavailable" if value is None else value
+
+    def get_property(self, name):
+        return self._data.get(name, {}).get("result", {})
+
+    def get_value(self, name, default=None):
+        return self.get_property(name).get("value", default)
+
+    @property
+    def get_data(self):
+        return self._data
+
+
+class _FakeGw:
+    """Gateway with sensors list and get_circuits."""
+
+    def __init__(self, sensors, circuits=None):
+        self.sensors = sensors
+        self._circuits = circuits or {}
+
+    def get_circuits(self, ctype):
+        return self._circuits.get(ctype, [])
+
+
+def test_unupdated_type_is_not_heatpump() -> None:
+    """Empty RESULT / unavailable state must not be treated as hs type."""
+    sensor = _FakeObj("/heatSources/hs1/type", "type")
+    snap = hp.build_snapshot_from_gateway(_FakeGw([sensor]))
+    assert snap.hs_type is None
+    assert snap.is_heatpump is False
+
+
+def test_gateway_flattens_circuit_properties() -> None:
+    """Circuit child keys become heatingCircuits/hc2/... snapshot fields."""
+    circuit = _FakeObj(
+        "/heatingCircuits/hc2",
+        "hc2",
+        nested={
+            "status": {
+                "result": {"value": "ACTIVE"},
+                "uri": "/heatingCircuits/hc2/status",
+                "type": "regular",
+            },
+            "pumpModulation": {
+                "result": {"value": 100},
+                "uri": "/heatingCircuits/hc2/pumpModulation",
+                "type": "regular",
+            },
+            "supplyTemperatureSetpoint": {
+                "result": {"value": 22},
+                "uri": "/heatingCircuits/hc2/supplyTemperatureSetpoint",
+                "type": "regular",
+            },
+        },
+    )
+    type_sensor = _FakeObj("/heatSources/hs1/type", "type", value="Heatpump")
+    mod = _FakeObj("/heatSources/actualModulation", "actualModulation", value=40)
+    supply = _FakeObj(
+        "/heatSources/applianceSupplyTemperature",
+        "applianceSupplyTemperature",
+        value=22.4,
+    )
+    snap = hp.build_snapshot_from_gateway(
+        _FakeGw([type_sensor, mod, supply], {"hc": [circuit]})
+    )
+    assert snap.is_heatpump
+    assert snap.requesting_circuits == ["hc2"]
+    assert snap.primary_circuit == "hc2"
+
+
+def test_recording_hours_become_today_total() -> None:
+    """Hourly recording lists are summed as consumedEnergy_Today_kWh."""
+    rec = _FakeObj(
+        "/recordings/heatSources/total/energyMonitoring/consumedEnergy",
+        "consumedEnergy",
+        value=[
+            {"d": "2026-11-11T10:00:00", "value": 1.5},
+            {"d": "2026-11-11T11:00:00", "value": 2.5},
+        ],
+        kind="recording",
+    )
+    snap = hp.build_snapshot_from_gateway(_FakeGw([rec]))
+    assert snap.consumed_today == 4.0
+    assert snap.last_hour_electricity == 2.5
+
+
+def test_source_objects_skip_unrelated_and_child_sensors() -> None:
+    """Only matching sensors plus hc/dhw circuits are registered."""
+    outdoor = _FakeObj(
+        "/system/sensors/temperatures/outdoor_t1", "outdoor_t1", value=5
+    )
+    noise = _FakeObj("/gateway/uuid", "uuid", value="x")
+    circuit = _FakeObj("/heatingCircuits/hc1", "hc1", nested={})
+    child = _FakeObj(
+        "/heatingCircuits/hc1/pumpModulation", "pumpModulation", value=10
+    )
+    circuit.sensors = [child]
+    rec = _FakeObj(
+        "/recordings/heatSources/total/energyMonitoring/consumedEnergy",
+        "consumedEnergy",
+        kind="recording",
+    )
+    gw = _FakeGw([outdoor, noise, rec], {"hc": [circuit]})
+    sources = hp.heatpump_source_objects(gw)
+    paths = {obj.path for obj in sources}
+    assert outdoor.path in paths
+    assert rec.path in paths
+    assert circuit.path in paths
+    assert noise.path not in paths
+    assert child.path not in paths
+    assert hp.is_recording_source(rec)

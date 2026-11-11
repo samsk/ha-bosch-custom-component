@@ -479,23 +479,212 @@ def build_snapshot_from_path_map(path_values: dict[str, Any]) -> HeatpumpSnapsho
     )
 
 
+_MISSING_STRINGS = ("unavailable", "invalid")
+_RECORDING_KINDS = ("recording", "energy", "ecus_recording")
+_SOURCE_MARKERS = (
+    "hs1/type",
+    "actualModulation",
+    "applianceSupplyTemperature",
+    "actualSupplyTemperature",
+    "returnTemperature",
+    "outdoor_t1",
+    "dhwCircuits/",
+    "dhw1/charge",
+    "dhw1/actualTemp",
+    "dhw1/currentSetpoint",
+    "poolStatus",
+    "poolTemperature",
+    "poolSetpointTemperature",
+    "heatingCircuits/",
+    "pumpModulation",
+    "supplyTemperatureSetpoint",
+    "roomtemperature",
+    "energyMonitoring",
+    "consumedEnergy",
+    "outputProduced",
+    "eheater",
+)
+
+
+def _is_missing(value: Any) -> bool:
+    """True when a Bosch object has no usable reading yet."""
+    if value is None or value == "":
+        return True
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, str) and value.lower() in _MISSING_STRINGS:
+        return True
+    return False
+
+
+def _obj_data(obj: Any) -> dict[str, Any] | None:
+    """Library ``get_data`` dict (property or method) or ``_data``."""
+    data = getattr(obj, "get_data", None)
+    if callable(data):
+        try:
+            data = data()
+        except Exception:  # noqa: BLE001
+            data = None
+    if isinstance(data, dict):
+        return data
+    data = getattr(obj, "_data", None)
+    return data if isinstance(data, dict) else None
+
+
 def _obj_value(obj: Any) -> Any:
     """Scalar value from a Bosch sensor or circuit object."""
     attr = getattr(obj, "attr_id", None) or getattr(obj, "path", None)
+    if hasattr(obj, "get_value") and attr:
+        try:
+            val = obj.get_value(attr)
+        except Exception:  # noqa: BLE001
+            val = None
+        if not _is_missing(val):
+            return val
     if hasattr(obj, "get_property") and attr:
         try:
             prop = obj.get_property(attr)
         except Exception:  # noqa: BLE001
             prop = None
         if isinstance(prop, dict) and "value" in prop:
-            return prop["value"]
-        if prop is not None and not isinstance(prop, dict):
+            val = prop["value"]
+            if not _is_missing(val):
+                return val
+        if prop is not None and not isinstance(prop, dict) and not _is_missing(prop):
             return prop
-    for name in ("state", "value"):
-        val = getattr(obj, name, None)
-        if val is not None:
-            return val
+    state = getattr(obj, "state", None)
+    if not _is_missing(state):
+        return state
     return None
+
+
+def _obj_path_values(obj: Any) -> dict[str, Any]:
+    """URI → value map from one Bosch object, including circuit children."""
+    out: dict[str, Any] = {}
+    data = _obj_data(obj)
+    if data:
+        base = str(getattr(obj, "path", None) or "").rstrip("/")
+        for key, item in data.items():
+            if not isinstance(item, dict):
+                continue
+            result = item.get("result")
+            val = result.get("value") if isinstance(result, dict) else None
+            if _is_missing(val) and hasattr(obj, "get_value"):
+                try:
+                    val = obj.get_value(key)
+                except Exception:  # noqa: BLE001
+                    val = None
+            if _is_missing(val):
+                continue
+            uri = item.get("uri") or item.get("id")
+            if not uri:
+                uri = f"{base}/{key}" if base else key
+            out[str(uri)] = val
+        if out:
+            return _with_recording_today_totals(out)
+    path = getattr(obj, "path", None) or getattr(obj, "attr_id", None)
+    val = _obj_value(obj)
+    if path and not _is_missing(val):
+        out[str(path)] = val
+    return _with_recording_today_totals(out)
+
+
+def _sum_hour_rows(value: Any) -> float | None:
+    """Sum numeric hourly recording rows."""
+    rows: list[Any] | None = None
+    if isinstance(value, list):
+        rows = value
+    elif isinstance(value, dict) and isinstance(value.get("value"), list):
+        rows = value["value"]
+    if not rows:
+        return None
+    total = 0.0
+    found = False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        number = _as_float(row.get("value", row.get("y")))
+        if number is None:
+            continue
+        total += number
+        found = True
+    return round(total, 2) if found else None
+
+
+def _with_recording_today_totals(path_values: dict[str, Any]) -> dict[str, Any]:
+    """Expose hourly recording lists as ``*_Today_kWh`` sums."""
+    extra: dict[str, Any] = {}
+    for path, value in path_values.items():
+        if "Today" in path:
+            continue
+        total = _sum_hour_rows(value)
+        if total is None:
+            continue
+        extra[f"{path}_Today_kWh"] = total
+    if extra:
+        return {**path_values, **extra}
+    return path_values
+
+
+def _object_path(obj: Any) -> str:
+    """API path or attr id for matching."""
+    return str(getattr(obj, "path", None) or getattr(obj, "attr_id", None) or "")
+
+
+def is_recording_source(obj: Any) -> bool:
+    """True when the object is fetched on the hourly recording schedule."""
+    kind = str(getattr(obj, "kind", "") or "").lower()
+    return kind in _RECORDING_KINDS
+
+
+def object_matches_heatpump_source(obj: Any) -> bool:
+    """True when this object is needed to build a heat-pump snapshot."""
+    path = _object_path(obj).lower()
+    if not path:
+        return False
+    return any(marker.lower() in path for marker in _SOURCE_MARKERS)
+
+
+def heatpump_source_objects(gateway: Any) -> list[Any]:
+    """Bosch objects the virtual sensors must poll.
+
+    Heating/DHW circuits are registered as a whole (one update fills
+    child keys). Circuit child sensors are skipped to avoid double fetches.
+    """
+    objs: list[Any] = []
+    seen: set[int] = set()
+
+    def add(obj: Any) -> None:
+        if obj is None:
+            return
+        key = id(obj)
+        if key in seen:
+            return
+        seen.add(key)
+        objs.append(obj)
+
+    sensors = getattr(gateway, "sensors", None)
+    if isinstance(sensors, dict):
+        sensor_iter = sensors.values()
+    else:
+        try:
+            sensor_iter = list(sensors or [])
+        except TypeError:
+            sensor_iter = []
+    for obj in sensor_iter:
+        if object_matches_heatpump_source(obj):
+            add(obj)
+
+    getter = getattr(gateway, "get_circuits", None)
+    if getter:
+        for ctype in ("hc", "dhw"):
+            try:
+                circuits = getter(ctype) or []
+            except Exception:  # noqa: BLE001
+                continue
+            for circuit in circuits:
+                add(circuit)
+    return objs
 
 
 def _iter_gateway_objects(gateway: Any) -> list[Any]:
@@ -556,16 +745,9 @@ def heating_circuit_ids(gateway: Any, snapshot: HeatpumpSnapshot | None = None) 
     return ids
 
 
-def build_snapshot_from_gateway(gateway: Any) -> HeatpumpSnapshot | None:
+def build_snapshot_from_gateway(gateway: Any) -> HeatpumpSnapshot:
     """Collect path values from gateway sensors/circuits into a snapshot."""
     path_values: dict[str, Any] = {}
     for obj in _iter_gateway_objects(gateway):
-        path = getattr(obj, "path", None) or getattr(obj, "attr_id", None)
-        if not path:
-            continue
-        path_values[str(path)] = _obj_value(obj)
-
-    snapshot = build_snapshot_from_path_map(path_values)
-    if not snapshot.is_heatpump:
-        return None
-    return snapshot
+        path_values.update(_obj_path_values(obj))
+    return build_snapshot_from_path_map(path_values)
