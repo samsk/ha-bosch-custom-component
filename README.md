@@ -104,7 +104,7 @@ They belong to the **Bosch thermostat** integration as a child device of the gat
 
 All entities are **disabled**. On that device, enable **Show disabled entities**, then turn on the ones you want. After a reload they fill with the integration’s first refresh. COP, backup share, and last-hour kWh wait for the hourly recording pull (up to about an hour, or the next `:06`).
 
-Requestors can overlap. `dhw` when DHW setpoint is not 0; a circuit when the compressor is on and appliance supply is within 1 °C of that circuit’s flow setpoint (usually one); `pool` when pool status is not `off`. Pump running alone is circulation, not a heat request. Efficiency hint is a coarse cutoff, not a fault.
+Requestors can overlap. `dhw` when DHW setpoint is not 0; a circuit when the compressor is on and appliance supply is within 1 °C of that circuit’s actual supply (setpoint used only if actual is missing; usually one); `pool` when pool status is not `off`. Pump running alone is circulation, not a heat request. Efficiency hint is a coarse cutoff, not a fault.
 
 - **Heat pump mode** — `idle`, `circulation`, `compressor`, `space_heating`, `dhw`, `dhw_and_heating`, `pool`, `pool_and_heating`
 - **Compressor active** — modulation above 0

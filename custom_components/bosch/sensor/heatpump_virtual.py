@@ -228,10 +228,12 @@ class HeatpumpNumericSensor(_HeatpumpVirtualBase, SensorEntity):
         *,
         unit: str | None = None,
         device_class: SensorDeviceClass | None = None,
+        attrs_getter: Callable[[HeatpumpSnapshot], dict[str, Any]] | None = None,
     ) -> None:
         """Initialize numeric virtual sensor."""
         super().__init__(coordinator, gateway, uuid, key, name)
         self._getter = getter
+        self._attrs_getter = attrs_getter
         self._attr_native_unit_of_measurement = unit
         if device_class:
             self._attr_device_class = device_class
@@ -241,6 +243,14 @@ class HeatpumpNumericSensor(_HeatpumpVirtualBase, SensorEntity):
         """Return getter value."""
         snap = self._snapshot()
         return self._getter(snap) if snap else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Optional attributes (e.g. COP produced/consumed kWh)."""
+        snap = self._snapshot()
+        if snap and self._attrs_getter:
+            return self._attrs_getter(snap)
+        return {}
 
 
 class HeatpumpTextSensor(_HeatpumpVirtualBase, SensorEntity):
@@ -437,6 +447,10 @@ def build_heatpump_virtual_entities(
                 f"Cop{period.title()}",
                 f"COP {label}",
                 lambda s, p=period: s.cop(p),
+                attrs_getter=lambda s, p=period: {
+                    "produced_kwh": getattr(s, f"produced_{p}"),
+                    "consumed_kwh": getattr(s, f"consumed_{p}"),
+                },
             )
         )
         entities.append(

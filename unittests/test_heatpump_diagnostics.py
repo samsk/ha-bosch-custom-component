@@ -59,10 +59,12 @@ def test_pool_mode_requires_compressor() -> None:
     data = _standby()
     data["heatSources/poolStatus"] = "on"
     data["heatSources/actualModulation"] = 40
+    data["heatSources/applianceSupplyTemperature"] = 10.0
     snap = hp.build_snapshot_from_path_map(data)
     assert hp.classify_heatpump_mode(snap) == "pool"
 
     data["heatingCircuits/hc2/supplyTemperatureSetpoint"] = 30
+    data["heatingCircuits/hc2/actualSupplyTemperature"] = 30.2
     data["heatSources/applianceSupplyTemperature"] = 30.4
     snap = hp.build_snapshot_from_path_map(data)
     assert snap.space_heating_active
@@ -74,10 +76,11 @@ def test_pool_mode_requires_compressor() -> None:
 
 
 def test_circuit_requestor_matches_appliance_supply() -> None:
-    """The circuit whose flow setpoint matches appliance supply is requesting."""
+    """The circuit whose actual supply matches appliance supply is requesting."""
     data = _standby()
     data["heatSources/actualModulation"] = 40
-    data["heatSources/applianceSupplyTemperature"] = 22.4
+    data["heatSources/applianceSupplyTemperature"] = 24.4
+    data["heatingCircuits/hc1/actualSupplyTemperature"] = 40.2
     snap = hp.build_snapshot_from_path_map(data)
     assert snap.requesting_circuits == ["hc2"]
     assert hp.classify_heatpump_mode(snap) == "space_heating"
@@ -88,10 +91,31 @@ def test_circuit_requestor_matches_appliance_supply() -> None:
     assert hp.classify_heatpump_mode(snap) == "circulation"
 
 
+def test_aku_buffer_matches_actual_not_setpoint() -> None:
+    """AKU/hc1 actual supply matches appliance; setpoint alone does not."""
+    data = _standby()
+    data["heatSources/actualModulation"] = 60
+    data["heatSources/applianceSupplyTemperature"] = 44.4
+    data["heatSources/actualSupplyTemperature"] = 44.4
+    data["heatSources/returnTemperature"] = 40.5
+    data["heatingCircuits/hc1/supplyTemperatureSetpoint"] = 32
+    data["heatingCircuits/hc1/actualSupplyTemperature"] = 44.5
+    data["heatingCircuits/hc2/supplyTemperatureSetpoint"] = 30
+    data["heatingCircuits/hc2/actualSupplyTemperature"] = 29.9
+    data["heatingCircuits/hc2/pumpModulation"] = 100
+    snap = hp.build_snapshot_from_path_map(data)
+    assert snap.requesting_circuits == ["hc1"]
+    assert snap.heat_requestors == ["dhw", "hc1"]
+    assert snap.heat_source_delta == 3.9
+    # charge=stop: requestors include dhw, mode uses charging only
+    assert hp.classify_heatpump_mode(snap) == "space_heating"
+
+
 def test_requestors_can_overlap() -> None:
     """DHW setpoint, matching circuits, and pool are independent requestors."""
     data = _standby()
     data["heatSources/actualModulation"] = 40
+    data["heatSources/applianceSupplyTemperature"] = 10.0
     data["dhwCircuits/dhw1/currentSetpoint"] = 0
     data["heatSources/poolStatus"] = "off"
     snap = hp.build_snapshot_from_path_map(data)
@@ -101,6 +125,8 @@ def test_requestors_can_overlap() -> None:
     data["dhwCircuits/dhw1/currentSetpoint"] = 51
     data["heatSources/applianceSupplyTemperature"] = 22.0
     data["heatingCircuits/hc1/supplyTemperatureSetpoint"] = 22.2
+    data["heatingCircuits/hc1/actualSupplyTemperature"] = 22.1
+    data["heatingCircuits/hc2/actualSupplyTemperature"] = 22.0
     data["heatSources/poolStatus"] = "on"
     snap = hp.build_snapshot_from_path_map(data)
     assert snap.heat_requestors == ["dhw", "hc1", "hc2", "pool"]
@@ -111,6 +137,7 @@ def test_dhw_mode() -> None:
     """DHW charge with compressor selects dhw."""
     data = _standby()
     data["heatSources/actualModulation"] = 40
+    data["heatSources/applianceSupplyTemperature"] = 10.0
     data["dhwCircuits/dhw1/charge"] = "start"
     snap = hp.build_snapshot_from_path_map(data)
     assert hp.classify_heatpump_mode(snap) == "dhw"
@@ -152,6 +179,59 @@ def test_last_hour_from_recording_rows() -> None:
     snap = hp.build_snapshot_from_path_map(data)
     assert snap.last_hour_electricity == 1.2
     assert snap.consumed_today == 23.0
+
+
+def test_today_scalar_not_overwritten_by_hourly_sum() -> None:
+    """Bosch daily total wins over a multi-day hourly recording sum."""
+    data = _standby()
+    data["recordings/heatSources/total/energyMonitoring/consumedEnergy"] = [
+        {"d": "2026-11-09T10:00:00", "value": 10.0},
+        {"d": "2026-11-10T10:00:00", "value": 5.0},
+        {"d": "2026-11-10T11:00:00", "value": 5.0},
+    ]
+    data["recordings/heatSources/total/energyMonitoring/outputProduced"] = [
+        {"d": "2026-11-09T10:00:00", "value": 40.0},
+        {"d": "2026-11-10T10:00:00", "value": 20.0},
+        {"d": "2026-11-10T11:00:00", "value": 20.0},
+    ]
+    snap = hp.build_snapshot_from_path_map(data)
+    assert snap.consumed_today == 23.0
+    assert snap.produced_today == 76.0
+    assert snap.cop("today") == 3.3
+
+
+def test_hourly_only_sums_latest_day() -> None:
+    """Without Today_kWh, only the latest calendar day is summed."""
+    data = {
+        "recordings/heatSources/total/energyMonitoring/consumedEnergy": [
+            {"d": "2026-11-09T10:00:00", "value": 10.0},
+            {"d": "2026-11-10T10:00:00", "value": 1.5},
+            {"d": "2026-11-10T11:00:00", "value": 2.5},
+        ],
+        "recordings/heatSources/total/energyMonitoring/outputProduced": [
+            {"d": "2026-11-09T10:00:00", "value": 40.0},
+            {"d": "2026-11-10T10:00:00", "value": 5.0},
+            {"d": "2026-11-10T11:00:00", "value": 7.0},
+        ],
+    }
+    snap = hp.build_snapshot_from_path_map(data)
+    assert snap.consumed_today == 4.0
+    assert snap.produced_today == 12.0
+    assert snap.cop("today") == 3.0
+
+
+def test_delta_skips_recording_list_and_uses_appliance() -> None:
+    """Recording lists are ignored; appliance supply fills missing supply."""
+    data = _standby()
+    del data["heatSources/actualSupplyTemperature"]
+    data["recordings/heatSources/actualSupplyTemperature"] = [
+        {"d": "2026-11-10T10:00:00", "value": 99.0}
+    ]
+    data["heatSources/applianceSupplyTemperature"] = 44.4
+    data["heatSources/returnTemperature"] = 40.5
+    snap = hp.build_snapshot_from_path_map(data)
+    assert snap.supply_temp is None
+    assert snap.heat_source_delta == 3.9
 
 
 def test_water_flow_does_not_mean_charging() -> None:

@@ -25,9 +25,11 @@ class CircuitSnapshot:
     room_temperature: float | None = None
 
     def matches_appliance_supply(self, appliance_supply: float | None) -> bool:
-        """True when this circuit's flow setpoint is what the appliance is supplying.
+        """True when this circuit is receiving the appliance supply.
 
-        Pump speed is not a heat request. Setpoint 0 means the circuit is off.
+        Prefer actual circuit supply (buffer/AKU charge). Fall back to flow
+        setpoint when actual is missing. Pump speed is not a heat request.
+        Setpoint 0 means the circuit is off.
         """
         if (self.status or "").upper() != "ACTIVE":
             return False
@@ -37,7 +39,12 @@ class CircuitSnapshot:
             or self.supply_setpoint <= 0
         ):
             return False
-        return abs(appliance_supply - self.supply_setpoint) <= SUPPLY_MARGIN_C
+        target = (
+            self.supply_actual
+            if self.supply_actual is not None
+            else self.supply_setpoint
+        )
+        return abs(appliance_supply - target) <= SUPPLY_MARGIN_C
 
     @property
     def pump_running(self) -> bool:
@@ -131,14 +138,19 @@ class HeatpumpSnapshot:
 
     @property
     def heat_source_delta(self) -> float | None:
-        """Supply minus return."""
-        if self.supply_temp is None or self.return_temp is None:
+        """Supply minus return; appliance supply if heat-source supply missing."""
+        supply = (
+            self.supply_temp
+            if self.supply_temp is not None
+            else self.appliance_supply_temp
+        )
+        if supply is None or self.return_temp is None:
             return None
-        return round(self.supply_temp - self.return_temp, 2)
+        return round(supply - self.return_temp, 2)
 
     @property
     def requesting_circuits(self) -> list[str]:
-        """Circuits whose flow setpoint matches the appliance supply.
+        """Circuits whose actual supply matches the appliance supply.
 
         Only while the compressor is on. A leftover supply temperature
         during circulation is not a heat request.
@@ -156,7 +168,7 @@ class HeatpumpSnapshot:
         """DHW, heating circuits, and pool. Any combination can be active.
 
         A circuit is included only while the compressor is on and the
-        appliance supply matches that circuit's flow setpoint. More than
+        appliance supply matches that circuit's actual supply. More than
         one circuit can match; usually it is one.
         """
         names: list[str] = []
@@ -294,13 +306,36 @@ def _as_float(value: Any) -> float | None:
     return number
 
 
+def _is_scalar(value: Any) -> bool:
+    """True for a live reading (not a recording list/dict payload)."""
+    return value is not None and not isinstance(value, (list, dict, bool))
+
+
 def _path_value(index: dict[str, Any], *suffixes: str) -> Any:
-    """Return first matching path value by suffix."""
+    """Return matching scalar; prefer exact live path over recordings suffix."""
+    exact_recording: Any = None
+    suffix_live: Any = None
     for path, value in index.items():
+        if not _is_scalar(value):
+            continue
+        norm = path.lstrip("/")
+        recording = norm.startswith("recordings/")
         for suffix in suffixes:
-            if path.endswith(suffix) or path == suffix.lstrip("/"):
-                return value
-    return None
+            clean = suffix.lstrip("/")
+            if norm == clean:
+                if recording:
+                    if exact_recording is None:
+                        exact_recording = value
+                else:
+                    return value
+            elif norm.endswith(clean):
+                if recording:
+                    continue
+                if suffix_live is None:
+                    suffix_live = value
+    if suffix_live is not None:
+        return suffix_live
+    return exact_recording
 
 
 def _latest_hour_value(value: Any) -> float | None:
@@ -346,6 +381,7 @@ def _recording_hour(index: dict[str, Any], marker: str) -> float | None:
 
 def build_snapshot_from_path_map(path_values: dict[str, Any]) -> HeatpumpSnapshot:
     """Build snapshot from path → raw value map (tests and gateway adapter)."""
+    path_values = _with_recording_today_totals(path_values)
     index = {p.lstrip("/"): v for p, v in path_values.items()}
 
     circuits: list[CircuitSnapshot] = []
@@ -581,8 +617,8 @@ def _obj_path_values(obj: Any) -> dict[str, Any]:
     return _with_recording_today_totals(out)
 
 
-def _sum_hour_rows(value: Any) -> float | None:
-    """Sum numeric hourly recording rows."""
+def _sum_hour_rows_latest_day(value: Any) -> float | None:
+    """Sum numeric hourly rows for the latest calendar day only."""
     rows: list[Any] | None = None
     if isinstance(value, list):
         rows = value
@@ -590,10 +626,25 @@ def _sum_hour_rows(value: Any) -> float | None:
         rows = value["value"]
     if not rows:
         return None
+    latest_day: str | None = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        stamp = row.get("d")
+        if stamp is None:
+            continue
+        day = str(stamp)[:10]
+        if latest_day is None or day > latest_day:
+            latest_day = day
+    if latest_day is None:
+        return None
     total = 0.0
     found = False
     for row in rows:
         if not isinstance(row, dict):
+            continue
+        stamp = row.get("d")
+        if stamp is None or str(stamp)[:10] != latest_day:
             continue
         number = _as_float(row.get("value", row.get("y")))
         if number is None:
@@ -604,15 +655,20 @@ def _sum_hour_rows(value: Any) -> float | None:
 
 
 def _with_recording_today_totals(path_values: dict[str, Any]) -> dict[str, Any]:
-    """Expose hourly recording lists as ``*_Today_kWh`` sums."""
+    """Expose hourly energy lists as ``*_Today_kWh`` without overwriting scalars."""
     extra: dict[str, Any] = {}
     for path, value in path_values.items():
         if "Today" in path:
             continue
-        total = _sum_hour_rows(value)
+        if "energyMonitoring" not in path:
+            continue
+        key = f"{path}_Today_kWh"
+        if key in path_values and _as_float(path_values[key]) is not None:
+            continue
+        total = _sum_hour_rows_latest_day(value)
         if total is None:
             continue
-        extra[f"{path}_Today_kWh"] = total
+        extra[key] = total
     if extra:
         return {**path_values, **extra}
     return path_values
