@@ -10,9 +10,17 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
 )
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
-from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfTemperature, EntityCategory
+from homeassistant.const import (
+    PERCENTAGE,
+    UnitOfEnergy,
+    UnitOfTemperature,
+    UnitOfTime,
+    EntityCategory,
+)
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from bosch_thermostat_client.const import HTTP
 
@@ -26,6 +34,7 @@ from ..heatpump_diagnostics import (
     heating_circuit_ids,
     is_recording_source,
 )
+from ..heatpump_split import HeatpumpSplitAccumulator
 
 if TYPE_CHECKING:
     from ..coordinator import BoschDataUpdateCoordinator
@@ -45,6 +54,8 @@ MODE_OPTIONS = [
 ]
 
 _HP_DIAG_ATTR = "_hp_diag_sources"
+_HP_SPLIT_ATTR = "_hp_split_acc"
+_SPLIT_STORE_VERSION = 1
 
 
 class _HeatpumpRecordingPull:
@@ -111,6 +122,107 @@ def _unregister_heatpump_sources(coordinator: BoschDataUpdateCoordinator) -> Non
     setattr(coordinator, _HP_DIAG_ATTR, None)
 
 
+def _split_bucket(coordinator: BoschDataUpdateCoordinator) -> dict[str, Any] | None:
+    """Shared compressor-split state on the coordinator."""
+    bucket = getattr(coordinator, _HP_SPLIT_ATTR, None)
+    return bucket if isinstance(bucket, dict) else None
+
+
+async def _ensure_heatpump_split(
+    coordinator: BoschDataUpdateCoordinator,
+    gateway: BoschGateway,
+    uuid: str,
+) -> HeatpumpSplitAccumulator:
+    """Load or create the shared daily compressor-time accumulator."""
+    bucket = _split_bucket(coordinator)
+    if bucket is not None:
+        bucket["refs"] += 1
+        return bucket["acc"]
+
+    store = Store(
+        coordinator.hass,
+        _SPLIT_STORE_VERSION,
+        f"bosch.heatpump_split_{uuid}",
+    )
+    acc = HeatpumpSplitAccumulator.from_dict(await store.async_load())
+
+    def _on_update() -> None:
+        """Attribute compressor time after each coordinator refresh."""
+        snap = build_snapshot_from_gateway(gateway)
+        acc.add_tick(snap, dt_util.now())
+        coordinator.hass.async_create_task(store.async_save(acc.to_dict()))
+
+    unsub = coordinator.async_add_listener(_on_update)
+    setattr(
+        coordinator,
+        _HP_SPLIT_ATTR,
+        {"refs": 1, "acc": acc, "store": store, "unsub": unsub},
+    )
+    return acc
+
+
+async def _release_heatpump_split(coordinator: BoschDataUpdateCoordinator) -> None:
+    """Persist and drop the accumulator when the last entity leaves."""
+    bucket = _split_bucket(coordinator)
+    if not bucket:
+        return
+    bucket["refs"] -= 1
+    if bucket["refs"] > 0:
+        return
+    unsub = bucket.get("unsub")
+    if callable(unsub):
+        unsub()
+    store = bucket.get("store")
+    acc = bucket.get("acc")
+    if store is not None and acc is not None:
+        await store.async_save(acc.to_dict())
+    setattr(coordinator, _HP_SPLIT_ATTR, None)
+
+
+def _split_minutes(
+    coordinator: BoschDataUpdateCoordinator, sink: str
+) -> Callable[[HeatpumpSnapshot], float | None]:
+    """Getter for compressor minutes today."""
+
+    def _getter(_snap: HeatpumpSnapshot) -> float | None:
+        bucket = _split_bucket(coordinator)
+        if not bucket:
+            return None
+        return bucket["acc"].minutes(sink)
+
+    return _getter
+
+
+def _split_share(
+    coordinator: BoschDataUpdateCoordinator, sink: str
+) -> Callable[[HeatpumpSnapshot], float | None]:
+    """Getter for compressor share percent today."""
+
+    def _getter(_snap: HeatpumpSnapshot) -> float | None:
+        bucket = _split_bucket(coordinator)
+        if not bucket:
+            return None
+        return bucket["acc"].share_percent(sink)
+
+    return _getter
+
+
+def _split_attrs(
+    coordinator: BoschDataUpdateCoordinator, sink: str
+) -> Callable[[HeatpumpSnapshot], dict[str, Any]]:
+    """Attribute with raw compressor seconds."""
+
+    def _getter(_snap: HeatpumpSnapshot) -> dict[str, Any]:
+        bucket = _split_bucket(coordinator)
+        if not bucket:
+            return {}
+        return {
+            "compressor_seconds": round(bucket["acc"].seconds.get(sink, 0.0), 1)
+        }
+
+    return _getter
+
+
 class _HeatpumpVirtualBase(CoordinatorEntity):
     """Shared base for heat-pump virtual entities."""
 
@@ -150,9 +262,11 @@ class _HeatpumpVirtualBase(CoordinatorEntity):
         """Share one poll set; integration refresh after setup fills values."""
         await super().async_added_to_hass()
         _register_heatpump_sources(self.coordinator, self._gateway)
+        await _ensure_heatpump_split(self.coordinator, self._gateway, self._uuid)
 
     async def async_will_remove_from_hass(self) -> None:
         """Drop the shared poll set when the last entity is removed."""
+        await _release_heatpump_split(self.coordinator)
         _unregister_heatpump_sources(self.coordinator)
         await super().async_will_remove_from_hass()
 
@@ -524,4 +638,39 @@ def build_heatpump_virtual_entities(
             ),
         ]
     )
+
+    split_sinks = list(circuit_ids)
+    if "dhw" not in split_sinks:
+        split_sinks.append("dhw")
+    if (
+        snap.pool_status is not None or snap.pool_temp is not None
+    ) and "pool" not in split_sinks:
+        split_sinks.append("pool")
+    for sink in split_sinks:
+        label = sink
+        entities.append(
+            HeatpumpNumericSensor(
+                coordinator,
+                gateway,
+                uuid,
+                f"SplitMinutes{sink}",
+                f"{label} compressor minutes today",
+                _split_minutes(coordinator, sink),
+                unit=UnitOfTime.MINUTES,
+                device_class=SensorDeviceClass.DURATION,
+                attrs_getter=_split_attrs(coordinator, sink),
+            )
+        )
+        entities.append(
+            HeatpumpNumericSensor(
+                coordinator,
+                gateway,
+                uuid,
+                f"SplitShare{sink}",
+                f"{label} compressor share today",
+                _split_share(coordinator, sink),
+                unit=PERCENTAGE,
+                attrs_getter=_split_attrs(coordinator, sink),
+            )
+        )
     return entities

@@ -124,6 +124,8 @@ Requestors can overlap. `dhw` when DHW setpoint is not 0; a circuit when the com
 - **Backup heater share today / month / year** — e-heater / consumed electricity (%)
 - **Backup heater used today** — e-heater today above 0
 - **Last hour electricity / heat / backup heater** — latest completed hourly kWh
+- **hcN / dhw / pool compressor minutes today** — compressor-on time attributed to that sink
+- **hcN / dhw / pool compressor share today** — % of compressor-on time (not a Bosch per-circuit kWh meter)
 - **Heat pump efficiency hint** — `ok`, `check_backup`, `check_cop`, `check_spread`, `unknown`
 
 # Help
