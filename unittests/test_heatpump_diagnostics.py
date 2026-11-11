@@ -274,8 +274,8 @@ def test_recording_hours_become_today_total() -> None:
     assert snap.last_hour_electricity == 2.5
 
 
-def test_source_objects_skip_unrelated_and_child_sensors() -> None:
-    """Only matching sensors plus hc/dhw circuits are registered."""
+def test_source_objects_skip_circuits_and_noise() -> None:
+    """Poll matching sensors only; climate already updates circuits."""
     outdoor = _FakeObj(
         "/system/sensors/temperatures/outdoor_t1", "outdoor_t1", value=5
     )
@@ -295,7 +295,7 @@ def test_source_objects_skip_unrelated_and_child_sensors() -> None:
     paths = {obj.path for obj in sources}
     assert outdoor.path in paths
     assert rec.path in paths
-    assert circuit.path in paths
+    assert circuit.path not in paths
     assert noise.path not in paths
     assert child.path not in paths
     assert hp.is_recording_source(rec)

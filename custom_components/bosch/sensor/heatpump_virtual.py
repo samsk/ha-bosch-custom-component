@@ -44,7 +44,7 @@ MODE_OPTIONS = [
     "circulation",
 ]
 
-_kicked_recordings: set[int] = set()
+_HP_DIAG_ATTR = "_hp_diag_sources"
 
 
 class _HeatpumpRecordingPull:
@@ -64,6 +64,51 @@ class _HeatpumpRecordingPull:
     async def insert_statistics_range(self, start_time: Any) -> None:
         """Unused; protocol compatibility."""
         return None
+
+
+def _register_heatpump_sources(
+    coordinator: BoschDataUpdateCoordinator, gateway: BoschGateway
+) -> None:
+    """Poll snapshot paths once, shared by all virtual entities."""
+    bucket = getattr(coordinator, _HP_DIAG_ATTR, None)
+    if bucket is not None:
+        bucket["refs"] += 1
+        return
+    regular: list[Any] = []
+    recording: list[_HeatpumpRecordingPull] = []
+    for obj in heatpump_source_objects(gateway):
+        if is_recording_source(obj):
+            wrapper = _HeatpumpRecordingPull(obj)
+            coordinator.register_recording_entity(wrapper)
+            recording.append(wrapper)
+        else:
+            coordinator.register_object(obj)
+            regular.append(obj)
+    setattr(
+        coordinator,
+        _HP_DIAG_ATTR,
+        {"refs": 1, "regular": regular, "recording": recording},
+    )
+    _LOGGER.debug(
+        "Heat-pump diagnostics polling %d sensors, %d recordings",
+        len(regular),
+        len(recording),
+    )
+
+
+def _unregister_heatpump_sources(coordinator: BoschDataUpdateCoordinator) -> None:
+    """Drop snapshot polls when the last virtual entity is removed."""
+    bucket = getattr(coordinator, _HP_DIAG_ATTR, None)
+    if not bucket:
+        return
+    bucket["refs"] -= 1
+    if bucket["refs"] > 0:
+        return
+    for obj in bucket["regular"]:
+        coordinator.unregister_object(obj)
+    for wrapper in bucket["recording"]:
+        coordinator.unregister_recording_entity(wrapper)
+    setattr(coordinator, _HP_DIAG_ATTR, None)
 
 
 class _HeatpumpVirtualBase(CoordinatorEntity):
@@ -88,8 +133,6 @@ class _HeatpumpVirtualBase(CoordinatorEntity):
         self._key = key
         self._attr_name = name
         self._attr_unique_id = f"HeatpumpDiag{key}{uuid}"
-        self._regular_sources: list[Any] = []
-        self._recording_sources: list[_HeatpumpRecordingPull] = []
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -104,40 +147,14 @@ class _HeatpumpVirtualBase(CoordinatorEntity):
         return info
 
     async def async_added_to_hass(self) -> None:
-        """Poll the gateway paths this snapshot needs."""
+        """Share one poll set; integration refresh after setup fills values."""
         await super().async_added_to_hass()
-        for obj in heatpump_source_objects(self._gateway):
-            if is_recording_source(obj):
-                wrapper = _HeatpumpRecordingPull(obj)
-                self.coordinator.register_recording_entity(wrapper)
-                self._recording_sources.append(wrapper)
-            else:
-                self.coordinator.register_object(obj)
-                self._regular_sources.append(obj)
-        await self.coordinator.async_request_refresh()
-        self._kick_recording_fetch()
+        _register_heatpump_sources(self.coordinator, self._gateway)
 
     async def async_will_remove_from_hass(self) -> None:
-        """Stop polling snapshot sources when this entity is disabled."""
-        for obj in self._regular_sources:
-            self.coordinator.unregister_object(obj)
-        self._regular_sources = []
-        for wrapper in self._recording_sources:
-            self.coordinator.unregister_recording_entity(wrapper)
-        self._recording_sources = []
-        if not self.coordinator.recording_entities:
-            _kicked_recordings.discard(id(self.coordinator))
+        """Drop the shared poll set when the last entity is removed."""
+        _unregister_heatpump_sources(self.coordinator)
         await super().async_will_remove_from_hass()
-
-    def _kick_recording_fetch(self) -> None:
-        """Run one recording pull now; later ones stay on the hourly slot."""
-        if not self._recording_sources:
-            return
-        key = id(self.coordinator)
-        if key in _kicked_recordings:
-            return
-        _kicked_recordings.add(key)
-        self.hass.async_create_task(self.coordinator.async_recording_sensors_update())
 
     def _snapshot(self) -> HeatpumpSnapshot:
         """Rebuild snapshot from gateway objects."""

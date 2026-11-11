@@ -488,21 +488,13 @@ _SOURCE_MARKERS = (
     "actualSupplyTemperature",
     "returnTemperature",
     "outdoor_t1",
-    "dhwCircuits/",
     "dhw1/charge",
     "dhw1/actualTemp",
     "dhw1/currentSetpoint",
     "poolStatus",
     "poolTemperature",
     "poolSetpointTemperature",
-    "heatingCircuits/",
-    "pumpModulation",
-    "supplyTemperatureSetpoint",
-    "roomtemperature",
     "energyMonitoring",
-    "consumedEnergy",
-    "outputProduced",
-    "eheater",
 )
 
 
@@ -646,23 +638,14 @@ def object_matches_heatpump_source(obj: Any) -> bool:
 
 
 def heatpump_source_objects(gateway: Any) -> list[Any]:
-    """Bosch objects the virtual sensors must poll.
+    """Bosch sensors the virtual snapshot must poll.
 
-    Heating/DHW circuits are registered as a whole (one update fills
-    child keys). Circuit child sensors are skipped to avoid double fetches.
+    Heating and DHW circuits are already polled by climate / water heater.
+    Do not register those objects here — one circuit update fetches every
+    child URI and would stall startup.
     """
     objs: list[Any] = []
     seen: set[int] = set()
-
-    def add(obj: Any) -> None:
-        if obj is None:
-            return
-        key = id(obj)
-        if key in seen:
-            return
-        seen.add(key)
-        objs.append(obj)
-
     sensors = getattr(gateway, "sensors", None)
     if isinstance(sensors, dict):
         sensor_iter = sensors.values()
@@ -672,18 +655,13 @@ def heatpump_source_objects(gateway: Any) -> list[Any]:
         except TypeError:
             sensor_iter = []
     for obj in sensor_iter:
-        if object_matches_heatpump_source(obj):
-            add(obj)
-
-    getter = getattr(gateway, "get_circuits", None)
-    if getter:
-        for ctype in ("hc", "dhw"):
-            try:
-                circuits = getter(ctype) or []
-            except Exception:  # noqa: BLE001
-                continue
-            for circuit in circuits:
-                add(circuit)
+        if obj is None or not object_matches_heatpump_source(obj):
+            continue
+        key = id(obj)
+        if key in seen:
+            continue
+        seen.add(key)
+        objs.append(obj)
     return objs
 
 
