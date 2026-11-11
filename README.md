@@ -96,7 +96,13 @@ IVT recordings: `bosch.fetch_recordings_sensor_range` with the recording `statis
 
 **Experimental.** Derived from gateway paths, not certified Bosch diagnostics. Mode, requestors, and the efficiency hint can be wrong. Enable only if you accept that.
 
-Only when **Virtual heat-pump diagnostics** is on, protocol is HTTP, and `/heatSources/hs1/type` is `Heatpump`. Entities appear on a diagnostic device, all disabled by default.
+Only when **Virtual heat-pump diagnostics** is on and protocol is **HTTP** (local KM200, not cloud XMPP). Saving Configure reloads the integration.
+
+They belong to the **Bosch thermostat** integration as a child device of the gateway:
+
+**Settings → Devices & services → Bosch thermostat → Heat pump diagnostics**
+
+All entities are **disabled**. On that device, enable **Show disabled entities**, then turn on the ones you want. They stay unavailable until `/heatSources/hs1/type` is `Heatpump`.
 
 Requestors can overlap. `dhw` when DHW setpoint is not 0; a circuit when the compressor is on and appliance supply is within 1 °C of that circuit’s flow setpoint (usually one); `pool` when pool status is not `off`. Pump running alone is circulation, not a heat request. Efficiency hint is a coarse cutoff, not a fault.
 

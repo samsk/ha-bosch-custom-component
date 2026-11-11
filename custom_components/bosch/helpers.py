@@ -4,7 +4,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from .const import SOLAR
+from bosch_thermostat_client.const import HTTP
+
+from .const import BINARY_SENSOR, CONF_PROTOCOL, SENSOR, SOLAR
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -17,11 +19,21 @@ async def async_setup_platforms(
     config_entry: ConfigEntry
 ) -> None:
     """Set up platforms for Bosch gateway."""
+    extra = []
+    protocol = str(config_entry.data.get(CONF_PROTOCOL, "")).lower()
+    if config_entry.options.get("virtual_heatpump_diagnostics") and protocol in (
+        str(HTTP).lower(),
+        "http",
+    ):
+        extra = [SENSOR, BINARY_SENSOR]
     platforms = [
         platform
-        for platform in gateway_entry.supported_platforms
+        for platform in list(gateway_entry.supported_platforms) + extra
         if platform != SOLAR
     ]
+    # Keep order, drop duplicates.
+    seen: set[str] = set()
+    platforms = [p for p in platforms if not (p in seen or seen.add(p))]
     
     if not platforms:
         _LOGGER.debug("No supported platforms found for Bosch gateway %s", gateway_entry.uuid)

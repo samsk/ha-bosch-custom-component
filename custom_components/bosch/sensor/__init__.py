@@ -2,18 +2,21 @@
 
 from bosch_thermostat_client.const import (
     ECUS_RECORDING,
-    HTTP,
     RECORDING,
     REGULAR,
     SENSOR,
     SENSORS,
 )
 from bosch_thermostat_client.const.easycontrol import ENERGY
-from ..const import CIRCUITS, DOMAIN, BOSCH_GATEWAY_ENTRY, CONF_PROTOCOL, UUID
+from ..const import CIRCUITS, DOMAIN, BOSCH_GATEWAY_ENTRY, UUID
 from .bosch import BoschSensor
 from .circuit import CircuitSensor
 from .energy import EcusRecordingSensors, EnergySensor, EnergySensors
-from .heatpump_virtual import build_heatpump_virtual_entities
+from .heatpump_virtual import (
+    HeatpumpBinarySensor,
+    build_heatpump_virtual_entities,
+    should_register_heatpump_virtual,
+)
 from .notifications import NotificationSensor
 from .recording import RecordingSensor
 
@@ -135,15 +138,12 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
                     )
                 )
     # Optional IVT heat-pump virtual diagnostics (each disabled by default).
-    protocol = str(config_entry.data.get(CONF_PROTOCOL, "")).lower()
-    if config_entry.options.get("virtual_heatpump_diagnostics", False) and protocol in (
-        str(HTTP).lower(),
-        "http",
-    ):
+    if should_register_heatpump_virtual(config_entry):
+        virtual = build_heatpump_virtual_entities(
+            coordinator=coordinator, gateway=gateway, uuid=uuid
+        )
         sensor_entities.extend(
-            build_heatpump_virtual_entities(
-                coordinator=coordinator, gateway=gateway, uuid=uuid
-            )
+            e for e in virtual if not isinstance(e, HeatpumpBinarySensor)
         )
 
     # Recording/energy entities put themselves on the coordinator's hourly

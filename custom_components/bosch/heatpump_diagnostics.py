@@ -479,42 +479,91 @@ def build_snapshot_from_path_map(path_values: dict[str, Any]) -> HeatpumpSnapsho
     )
 
 
-def build_snapshot_from_gateway(gateway: Any) -> HeatpumpSnapshot | None:
-    """Collect path values from gateway sensors/circuits into a snapshot."""
-    path_values: dict[str, Any] = {}
+def _obj_value(obj: Any) -> Any:
+    """Scalar value from a Bosch sensor or circuit object."""
+    attr = getattr(obj, "attr_id", None) or getattr(obj, "path", None)
+    if hasattr(obj, "get_property") and attr:
+        try:
+            prop = obj.get_property(attr)
+        except Exception:  # noqa: BLE001
+            prop = None
+        if isinstance(prop, dict) and "value" in prop:
+            return prop["value"]
+        if prop is not None and not isinstance(prop, dict):
+            return prop
+    for name in ("state", "value"):
+        val = getattr(obj, name, None)
+        if val is not None:
+            return val
+    return None
 
-    def _add_obj(obj: Any) -> None:
-        path = getattr(obj, "path", None) or getattr(obj, "attr_id", None)
-        if not path:
-            return
-        attr = getattr(obj, "attr_id", None) or path
-        state: Any = None
-        # Prefer the property payload. ``state`` is often a message, not the value.
-        if hasattr(obj, "get_property"):
-            try:
-                prop = obj.get_property(attr)
-            except Exception:  # noqa: BLE001
-                prop = None
-            if isinstance(prop, dict) and "value" in prop:
-                state = prop["value"]
-        if state is None:
-            state = getattr(obj, "state", None)
-        path_values[str(path)] = state
 
-    for sensor in getattr(gateway, "sensors", []) or []:
-        _add_obj(sensor)
-
+def _iter_gateway_objects(gateway: Any) -> list[Any]:
+    """Sensors plus circuit objects from a live gateway."""
+    objs: list[Any] = []
+    sensors = getattr(gateway, "sensors", None)
+    if isinstance(sensors, dict):
+        objs.extend(sensors.values())
+    elif sensors:
+        try:
+            objs.extend(list(sensors))
+        except TypeError:
+            pass
+    getter = getattr(gateway, "get_circuits", None)
+    if not getter:
+        return objs
     for ctype in ("hc", "dhw", "sc", "zn", "dv"):
-        getter = getattr(gateway, "get_circuits", None)
-        if not getter:
-            break
         try:
             circuits = getter(ctype) or []
         except Exception:  # noqa: BLE001
             continue
         for circuit in circuits:
-            for sensor in getattr(circuit, "sensors", []) or []:
-                _add_obj(sensor)
+            objs.append(circuit)
+            circ_sensors = getattr(circuit, "sensors", None)
+            if isinstance(circ_sensors, dict):
+                objs.extend(circ_sensors.values())
+            elif circ_sensors:
+                try:
+                    objs.extend(list(circ_sensors))
+                except TypeError:
+                    continue
+    return objs
+
+
+def heating_circuit_ids(gateway: Any, snapshot: HeatpumpSnapshot | None = None) -> list[str]:
+    """Heating circuit ids from the gateway, then from a snapshot."""
+    ids: list[str] = []
+    getter = getattr(gateway, "get_circuits", None)
+    if getter:
+        try:
+            for circuit in getter("hc") or []:
+                raw = (
+                    getattr(circuit, "id", None)
+                    or getattr(circuit, "attr_id", None)
+                    or getattr(circuit, "name", None)
+                )
+                if not raw:
+                    continue
+                cid = str(raw).rstrip("/").split("/")[-1]
+                if cid and cid not in ids:
+                    ids.append(cid)
+        except Exception:  # noqa: BLE001
+            pass
+    if snapshot:
+        for circuit in snapshot.circuits:
+            if circuit.circuit_id not in ids:
+                ids.append(circuit.circuit_id)
+    return ids
+
+
+def build_snapshot_from_gateway(gateway: Any) -> HeatpumpSnapshot | None:
+    """Collect path values from gateway sensors/circuits into a snapshot."""
+    path_values: dict[str, Any] = {}
+    for obj in _iter_gateway_objects(gateway):
+        path = getattr(obj, "path", None) or getattr(obj, "attr_id", None)
+        if not path:
+            continue
+        path_values[str(path)] = _obj_value(obj)
 
     snapshot = build_snapshot_from_path_map(path_values)
     if not snapshot.is_heatpump:

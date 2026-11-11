@@ -14,12 +14,15 @@ from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfTemperature, Ent
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from ..const import DOMAIN
+from bosch_thermostat_client.const import HTTP
+
+from ..const import CONF_PROTOCOL, DOMAIN
 from ..heatpump_diagnostics import (
     HeatpumpSnapshot,
     build_snapshot_from_gateway,
     classify_efficiency_hint,
     classify_heatpump_mode,
+    heating_circuit_ids,
 )
 
 if TYPE_CHECKING:
@@ -186,16 +189,30 @@ class HeatpumpTextSensor(_HeatpumpVirtualBase, SensorEntity):
         return {}
 
 
+def should_register_heatpump_virtual(config_entry: Any) -> bool:
+    """True when the option is on and the entry uses local HTTP."""
+    if not config_entry.options.get("virtual_heatpump_diagnostics", False):
+        return False
+    protocol = str(config_entry.data.get(CONF_PROTOCOL, "")).lower()
+    return protocol in (str(HTTP).lower(), "http")
+
+
 def build_heatpump_virtual_entities(
     coordinator: BoschDataUpdateCoordinator,
     gateway: BoschGateway,
     uuid: str,
 ) -> list[Any]:
-    """Create all virtual heat-pump entities (disabled by default)."""
+    """Create all virtual heat-pump entities (disabled by default).
+
+    Registers even when the live snapshot is not Heatpump yet, so entities
+    show up after the option is enabled. They stay unavailable until the
+    gateway reports a heat-pump type.
+    """
     snap = build_snapshot_from_gateway(gateway)
     if snap is None:
-        _LOGGER.debug("No Heatpump type; skipping virtual sensors.")
-        return []
+        _LOGGER.warning(
+            "Heat-pump diagnostics registered, but hs1/type is not Heatpump yet"
+        )
 
     entities: list[Any] = [
         HeatpumpModeSensor(coordinator, gateway, uuid, "Mode", "Heat pump mode"),
@@ -296,8 +313,10 @@ def build_heatpump_virtual_entities(
         ),
     ]
 
-    for circuit in snap.circuits:
-        cid = circuit.circuit_id
+    circuit_ids = heating_circuit_ids(gateway, snap)
+    if not circuit_ids and snap:
+        circuit_ids = [c.circuit_id for c in snap.circuits]
+    for cid in circuit_ids:
         entities.append(
             HeatpumpBinarySensor(
                 coordinator,
