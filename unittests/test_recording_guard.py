@@ -15,7 +15,7 @@ from custom_components.bosch.sensor.recording import RecordingSensor
 def test_append_statistics_skips_unavailable() -> None:
     """float('unavailable') must not raise; hour is skipped."""
     entity = RecordingSensor.__new__(RecordingSensor)
-    entity.statistic_id = "recording:testexternal"
+    entity._short_id = "test"
     entity._non_numeric_stat_logged = False
     entity.add_external_stats = MagicMock()
     entity._last_reset = None

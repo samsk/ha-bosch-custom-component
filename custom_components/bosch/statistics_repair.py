@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, cast
+from datetime import timedelta
+from typing import TYPE_CHECKING, cast
 
 from homeassistant.util import dt as dt_util
 
