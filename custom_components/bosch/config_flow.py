@@ -36,8 +36,7 @@ PROTOCOLS = [HTTP, XMPP]
 _LOGGER = logging.getLogger(__name__)
 
 
-@config_entries.HANDLERS.register(DOMAIN)
-class BoschFlowHandler(config_entries.ConfigFlow):
+class BoschFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a bosch config flow."""
 
     # 12 so that ha_bosch entries (version 11) load here. See migration.py.
@@ -200,28 +199,25 @@ class BoschFlowHandler(config_entries.ConfigFlow):
     @callback
     def async_get_options_flow(entry: config_entries.ConfigEntry):
         """Get option flow."""
-        return OptionsFlowHandler(entry)
+        return OptionsFlowHandler()
 
 
 class OptionsFlowHandler(config_entries.OptionsFlow):
     """Options flow handler for new API."""
-
-    def __init__(self, entry: config_entries.ConfigEntry):
-        """Initialize option."""
-        self.entry = entry
 
     async def async_step_init(self, user_input=None):
         """Display option dialog."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        new_stats_api = self.entry.options.get("new_stats_api", False)
-        optimistic_mode = self.entry.options.get("optimistic_mode", False)
-        scan_interval = self.entry.options.get("scan_interval", 60)
-        energy_stats_repair_days = self.entry.options.get(
+        entry = self.config_entry
+        new_stats_api = entry.options.get("new_stats_api", False)
+        optimistic_mode = entry.options.get("optimistic_mode", False)
+        scan_interval = entry.options.get("scan_interval", 60)
+        energy_stats_repair_days = entry.options.get(
             "energy_stats_repair_days", 7
         )
-        virtual_heatpump_diagnostics = self.entry.options.get(
+        virtual_heatpump_diagnostics = entry.options.get(
             "virtual_heatpump_diagnostics", False
         )
 
