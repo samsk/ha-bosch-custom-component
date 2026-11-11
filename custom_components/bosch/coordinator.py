@@ -179,7 +179,7 @@ class BoschDataUpdateCoordinator(DataUpdateCoordinator):
                 async with asyncio.TaskGroup() as tg:
                     for entity in entities:
                         tg.create_task(self._async_push_recording_entity(entity))
-                _LOGGER.debug("Bosch 1-hour entitites updated.")
+                _LOGGER.debug("Bosch 1-hour entities updated.")
         except Exception:
             # Without this an unexpected error would skip the reschedule below
             # and stop the hourly updates until Home Assistant is restarted.

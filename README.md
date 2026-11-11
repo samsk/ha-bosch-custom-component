@@ -8,7 +8,7 @@ If you like this component consider sponsoring my work: [:heart: Sponsor](https:
 **Hi, I'm looking for help to make this component better**
 https://github.com/bosch-thermostat/home-assistant-bosch-custom-component/issues/414
 
-**Latest version will only work with Home Assistant 2025.7 and Python >=3.12.**
+**Latest version targets Home Assistant 2026.11 (minimum HACS: 2026.8.0) and Python >=3.12.**
 For older HA look into release notes.
 
 If possible and if it's ok with you please enable Home Assistant Analytics so I can see how many people uses this integration.
@@ -53,6 +53,72 @@ Go to integration page, add Bosch component and follow on going screens.
 By default all sensors are disabled!
 Go to integration device `Bosch sensors` and enable sensor you'd like to see.
 If you have troubles, go to **wiki** and read more detailed installation instructions.
+
+Device **Configure** options:
+
+- **Use new statistic API** — write EasyControl energy and IVT recordings into Home Assistant long-term statistics (Energy dashboard). Entity state becomes `-17` when this is on.
+- **Energy stats repair days** — auto-reimport window (0–30, default 7, 0 disables) after EasyControl energy JSON keys change (`eCH` → `gCh`). Does not clean already-wrong data by itself.
+- **Virtual heat-pump diagnostics** — register **experimental** derived IVT heat-pump sensors. Every entity stays **disabled** until you enable it.
+
+## Energy statistics and repair (EasyControl CT200)
+
+EasyControl `/energy/history` is **one daily total per day** (`gCh`/`gHw`, older `eCH`/`eHW`). History on the thermostat is about **2–3 months**. Today is never imported.
+
+IVT / KM200 uses a different export (`/recordings/…?interval=YYYY-M-D`, 24 hourly slots, about **4 months**). The energy repair services below do **not** apply to IVT recordings.
+
+If heating kWh was stored on the hot-water statistic (or the reverse), new imports go to the correct series. To rewrite recent days, Developer tools → Actions:
+
+```yaml
+action: bosch.repair_energy_statistics
+target:
+  device_id: YOUR_BOSCH_DEVICE_ID
+data:
+  days: 7
+  logical_attr: all
+```
+
+The gateway is queried first. If any requested day is missing, repair **aborts and does not clear** Home Assistant. `logical_attr` can be `all`, `ch`, or `hw`.
+
+Leftover wrong series are not deleted. Rebind Energy dashboard if needed, or wipe one id:
+
+```yaml
+action: bosch.clear_energy_statistics
+target:
+  device_id: YOUR_BOSCH_DEVICE_ID
+data:
+  statistic_id: energy:gchenergy_central_heatingexternal
+  reimport: true
+```
+
+IVT recordings: `bosch.fetch_recordings_sensor_range` with the recording `statistic_id` and a date.
+
+## Virtual heat-pump sensors (IVT / HTTP)
+
+**Experimental.** Derived from gateway paths, not certified Bosch diagnostics. Mode, requestors, and the efficiency hint can be wrong. Enable only if you accept that.
+
+Only when **Virtual heat-pump diagnostics** is on, protocol is HTTP, and `/heatSources/hs1/type` is `Heatpump`. Entities appear on a diagnostic device, all disabled by default.
+
+Requestors can overlap. `dhw` when DHW setpoint is not 0; a circuit when the compressor is on and appliance supply is within 1 °C of that circuit’s flow setpoint (usually one); `pool` when pool status is not `off`. Pump running alone is circulation, not a heat request. Efficiency hint is a coarse cutoff, not a fault.
+
+- **Heat pump mode** — `idle`, `circulation`, `compressor`, `space_heating`, `dhw`, `dhw_and_heating`, `pool`, `pool_and_heating`
+- **Compressor active** — modulation above 0
+- **DHW requested** — hot-water setpoint not 0
+- **DHW charging** — `charge=start` only
+- **DHW temperature gap** — setpoint minus tank temperature (°C)
+- **Pool requested** — pool status not `off`
+- **Pool temperature gap** — pool setpoint minus pool temperature (°C)
+- **Space heating active** — at least one circuit requests heat
+- **Heating circuits requesting** — count of matching circuits
+- **Heat requestors** — comma list, e.g. `dhw,hc2,pool`
+- **Primary heating circuit** — highest pump modulation
+- **hcN requesting heat** — one binary sensor per heating circuit
+- **hcN room sensor fault** — room temperature at or below −50 °C (one per circuit)
+- **Heat source delta** — supply minus return (°C)
+- **COP today / month / year** — produced heat / consumed electricity
+- **Backup heater share today / month / year** — e-heater / consumed electricity (%)
+- **Backup heater used today** — e-heater today above 0
+- **Last hour electricity / heat / backup heater** — latest completed hourly kWh
+- **Heat pump efficiency hint** — `ok`, `check_backup`, `check_cop`, `check_spread`, `unknown`
 
 # Help
 

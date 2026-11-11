@@ -38,6 +38,52 @@ fetch_recordings_sensor_range:
       example: 'recording:recording'
       selector:
         text:
+repair_energy_statistics:
+  description: >-
+    Re-import the last N full days of EasyControl energy statistics for CH/HW
+    after a field-mapping fix. Never includes today.
+  target:
+    device:
+      integration: bosch
+  fields:
+    days:
+      name: Days
+      description: Number of past days to repair (1-30)
+      default: 7
+      selector:
+        number:
+          min: 1
+          max: 30
+    logical_attr:
+      name: Attribute
+      description: Which energy series to repair
+      default: all
+      selector:
+        select:
+          options:
+            - all
+            - ch
+            - hw
+clear_energy_statistics:
+  description: >-
+    Permanently clear one energy statistic_id. Optionally reimport all history
+    from the gateway afterwards.
+  target:
+    device:
+      integration: bosch
+  fields:
+    statistic_id:
+      name: Statistic ID
+      description: Statistic id from Developer tools → Statistics
+      example: 'energy:gchenergy_central_heatingexternal'
+      selector:
+        text:
+    reimport:
+      name: Reimport
+      description: Fetch all history and write again after clear
+      default: false
+      selector:
+        boolean:
 set_dhw_charge:
   description: Charge DHW circuit.
   target:

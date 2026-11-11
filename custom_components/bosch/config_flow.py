@@ -175,19 +175,22 @@ class BoschFlowHandler(config_entries.ConfigFlow):
             return self.async_abort(reason="faulty_credentials")
         except Exception as err:  # pylint: disable=broad-except
             _LOGGER.error("Error connecting Bosch at %s - %s", host, err)
-        else:
-            _LOGGER.debug("Adding Bosch entry.")
-            return self.async_create_entry(
-                title=device.device_name or "Unknown model",
-                data={
-                    CONF_ADDRESS: device.host,
-                    UUID: uuid,
-                    ACCESS_KEY: device.access_key,
-                    ACCESS_TOKEN: device.access_token,
-                    CONF_DEVICE_TYPE: self._choose_type,
-                    CONF_PROTOCOL: session_type,
-                },
-            )
+            return self.async_abort(reason="unknown")
+        if not uuid:
+            _LOGGER.error("Bosch gateway at %s returned no uuid", host)
+            return self.async_abort(reason="unknown")
+        _LOGGER.debug("Adding Bosch entry.")
+        return self.async_create_entry(
+            title=device.device_name or "Unknown model",
+            data={
+                CONF_ADDRESS: device.host,
+                UUID: uuid,
+                ACCESS_KEY: device.access_key,
+                ACCESS_TOKEN: device.access_token,
+                CONF_DEVICE_TYPE: self._choose_type,
+                CONF_PROTOCOL: session_type,
+            },
+        )
 
     async def async_step_discovery(self, discovery_info=None):
         """Handle a flow discovery."""
@@ -215,6 +218,12 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         new_stats_api = self.entry.options.get("new_stats_api", False)
         optimistic_mode = self.entry.options.get("optimistic_mode", False)
         scan_interval = self.entry.options.get("scan_interval", 60)
+        energy_stats_repair_days = self.entry.options.get(
+            "energy_stats_repair_days", 7
+        )
+        virtual_heatpump_diagnostics = self.entry.options.get(
+            "virtual_heatpump_diagnostics", False
+        )
 
         return self.async_show_form(
             step_id="init",
@@ -225,6 +234,13 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     vol.Optional("scan_interval", default=scan_interval): vol.All(
                         vol.Coerce(int), vol.Range(min=30, max=3600)
                     ),
+                    vol.Optional(
+                        "energy_stats_repair_days", default=energy_stats_repair_days
+                    ): vol.All(vol.Coerce(int), vol.Range(min=0, max=30)),
+                    vol.Optional(
+                        "virtual_heatpump_diagnostics",
+                        default=virtual_heatpump_diagnostics,
+                    ): bool,
                 }
             ),
         )

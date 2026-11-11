@@ -53,6 +53,7 @@ class RecordingSensor(StatisticHelper):
         )
         self._unit_of_measurement = bosch_object.unit_of_measurement
         self._stale_logged = False
+        self._non_numeric_stat_logged = False
 
     @property
     def device_name(self) -> str:
@@ -62,9 +63,7 @@ class RecordingSensor(StatisticHelper):
     @property
     def statistic_id(self) -> str:
         """External API statistic ID."""
-        if not self._short_id:
-            self._short_id = self.entity_id.replace(".", "").replace("sensor", "")
-        return f"{self._domain_name}:{self._short_id}external".lower()
+        return f"{self._domain_name}:{self._ensure_short_id()}external".lower()
 
     @staticmethod
     def _last_full_hour() -> datetime:
@@ -173,7 +172,23 @@ class RecordingSensor(StatisticHelper):
             current_ts = dt_util.as_timestamp(current_time)
             if current_ts in stats_dict:
                 stat = stats_dict[current_ts]
-                _state: float = float(stat["value"])
+                try:
+                    _state = float(stat["value"])
+                except (TypeError, ValueError):
+                    if not getattr(self, "_non_numeric_stat_logged", False):
+                        self._non_numeric_stat_logged = True
+                        _LOGGER.warning(
+                            "Recording %s skipped non-numeric value %r",
+                            self.statistic_id,
+                            stat.get("value"),
+                        )
+                    out[current_ts] = StatisticData(
+                        start=current_time,
+                        state=0.0,
+                        sum=_sum,
+                    )
+                    current_time += timedelta(hours=1)
+                    continue
                 _sum += _state  # increase sum
                 _LOGGER.debug(
                     "Putting past state to statistic table with id: %s. Date: %s, state: %s, sum: %s.",
@@ -212,12 +227,26 @@ class RecordingSensor(StatisticHelper):
         self.add_external_stats(stats=list(out.values()))
 
     def append_statistics(
-        self, stats: list[Any], sum: float, now: datetime
+        self, stats: list[Any] | None, sum: float, now: datetime
     ) -> float:
+        """Append hourly recording rows as external statistics."""
         statistics_to_push: list[StatisticData] = []
+        if not stats:
+            return sum
         for stat in stats:
             _date: datetime = stat["d"]
-            _state: float = float(stat["value"])
+            raw = stat.get("value")
+            try:
+                _state = float(raw)
+            except (TypeError, ValueError):
+                if not getattr(self, "_non_numeric_stat_logged", False):
+                    self._non_numeric_stat_logged = True
+                    _LOGGER.warning(
+                        "Recording %s skipped non-numeric value %r",
+                        self.statistic_id,
+                        raw,
+                    )
+                continue
             if _state == 0:
                 continue
             sum += _state
@@ -280,16 +309,19 @@ class RecordingSensor(StatisticHelper):
             last_stats = await get_last_stats_in_ha()
 
             async def get_last_stats_from_bosch_api() -> tuple[list[Any], float]:
-                last_stats_row = self.get_last_stats_before_date(
-                    last_stats=last_stats, day=start_of_day
-                )
+                if self.statistic_id in last_stats and last_stats[self.statistic_id]:
+                    last_stats_row = self.get_last_stats_before_date(
+                        last_stats=last_stats, day=start_of_day
+                    )
+                else:
+                    last_stats_row = last_stat_row
                 start_time_raw = last_stats_row.get("start")
                 _sum = cast(float, last_stats_row.get("sum", 0.0))
-                
+
                 start_time: datetime | None = None
                 if isinstance(start_time_raw, (int, float)):
                     start_time = timestamp_to_datetime_or_none(start_time_raw)
-                
+
                 if not start_time:
                     _LOGGER.debug(
                         "Start time not found. %s found %s",
@@ -320,18 +352,16 @@ class RecordingSensor(StatisticHelper):
                     "Returning state to put to statistic table %s",
                     self._bosch_object.state,
                 )
-                state = self._bosch_object.state
-                if state:
-                    # let's get last state once again
-                    # as bosch state provide whole day always.
+                state = self._bosch_object.state or []
+                if state and self.statistic_id in last_stats:
                     first_date_from_state = state[0]
                     last_stats_row = self.get_last_stats_before_date(
                         last_stats=last_stats, day=first_date_from_state["d"]
                     )
                     _sum = cast(float, last_stats_row.get("sum", 0.0))
-                return state, _sum
+                return list(state), _sum
 
-            if self.statistic_id in last_stats:
-                bosch_stats, _sum = await get_last_stats_from_bosch_api()
-                self.append_statistics(stats=bosch_stats, sum=_sum, now=now)
+            # Append when we have a last row, even if the window query is empty.
+            bosch_stats, _sum = await get_last_stats_from_bosch_api()
+            self.append_statistics(stats=bosch_stats, sum=_sum, now=now)
 

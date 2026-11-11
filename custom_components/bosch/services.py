@@ -31,6 +31,20 @@ SERVICE_GET_SCHEMA = SERVICE_INTEGRATION_SCHEMA.extend({vol.Required("path"): st
 SERVICE_FETCH_RANGE_SCHEMA = SERVICE_INTEGRATION_SCHEMA.extend(
     {vol.Required("day"): cv.date, vol.Required("statistic_id"): str}
 )
+SERVICE_REPAIR_ENERGY_SCHEMA = SERVICE_INTEGRATION_SCHEMA.extend(
+    {
+        vol.Optional("days", default=7): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=30)
+        ),
+        vol.Optional("logical_attr", default="all"): vol.In(["ch", "hw", "all"]),
+    }
+)
+SERVICE_CLEAR_ENERGY_SCHEMA = SERVICE_INTEGRATION_SCHEMA.extend(
+    {
+        vol.Required("statistic_id"): str,
+        vol.Optional("reimport", default=False): cv.boolean,
+    }
+)
 SERVICE_PUT_STRING_SCHEMA = SERVICE_GET_SCHEMA.extend({vol.Required(VALUE): str})
 SERVICE_PUT_FLOAT_SCHEMA = SERVICE_GET_SCHEMA.extend(
     {vol.Required(VALUE): vol.Or(int, float)}
@@ -216,6 +230,63 @@ def async_register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
         SERVICE_FETCH_RANGE_SCHEMA,
     )
 
+    async def async_handle_repair_energy(service_call: ServiceCall) -> None:
+        """Repair recent EasyControl energy statistics for enabled entities."""
+        from .sensor.energy import EnergySensor
+        from .statistics_repair import repair_energy_statistics_window
+
+        days = service_call.data.get("days", 7)
+        logical = str(service_call.data.get("logical_attr", "all")).upper()
+        _gateway_entries = find_gateway_entry(
+            hass=hass, devices_id=service_call.data[ATTR_DEVICE_ID]
+        )
+        for _gateway_entry in _gateway_entries:
+            if not _gateway_entry.coordinator:
+                continue
+            for entity in _gateway_entry.coordinator.recording_entities:
+                if not entity.enabled or not isinstance(entity, EnergySensor):
+                    continue
+                if not entity._uses_external_statistics:
+                    continue
+                attr = entity._read_attr_to_search
+                if logical != "ALL" and attr != logical:
+                    continue
+                await repair_energy_statistics_window(entity, days=days)
+
+    async def async_handle_clear_energy(service_call: ServiceCall) -> None:
+        """Clear one energy statistic series; optionally reimport all history."""
+        from .sensor.energy import EnergySensor
+        from .statistics_repair import clear_energy_statistics
+
+        statistic_id = service_call.data.get("statistic_id")
+        reimport = bool(service_call.data.get("reimport", False))
+        _gateway_entries = find_gateway_entry(
+            hass=hass, devices_id=service_call.data[ATTR_DEVICE_ID]
+        )
+        for _gateway_entry in _gateway_entries:
+            if not _gateway_entry.coordinator:
+                continue
+            for entity in _gateway_entry.coordinator.recording_entities:
+                if (
+                    entity.enabled
+                    and isinstance(entity, EnergySensor)
+                    and entity.statistic_id == statistic_id
+                ):
+                    await clear_energy_statistics(entity, reimport=reimport)
+
+    hass.services.async_register(
+        DOMAIN,
+        "repair_energy_statistics",
+        async_handle_repair_energy,
+        SERVICE_REPAIR_ENERGY_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "clear_energy_statistics",
+        async_handle_clear_energy,
+        SERVICE_CLEAR_ENERGY_SCHEMA,
+    )
+
 
 def async_remove_services(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
     """Remove the services once the last gateway is unloaded.
@@ -233,6 +304,8 @@ def async_remove_services(hass: HomeAssistant, config_entry: ConfigEntry) -> Non
         SERVICE_PUT_STRING,
         SERVICE_PUT_FLOAT,
         "fetch_recordings_sensor_range",
+        "repair_energy_statistics",
+        "clear_energy_statistics",
     ):
         if hass.services.has_service(DOMAIN, service):
             hass.services.async_remove(DOMAIN, service)
