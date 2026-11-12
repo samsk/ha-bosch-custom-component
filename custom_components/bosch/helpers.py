@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING
 
 from bosch_thermostat_client.const import HTTP
 
-from .const import BINARY_SENSOR, CONF_PROTOCOL, SENSOR, SOLAR
+from .const import BINARY_SENSOR, CLIMATE, CONF_PROTOCOL, SENSOR, SOLAR
+from .pool import async_pool_available
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -31,6 +32,13 @@ async def async_setup_platforms(
         for platform in list(gateway_entry.supported_platforms) + extra
         if platform != SOLAR
     ]
+    # Pool climate when KM200 has pool paths even without HC capability.
+    if (
+        CLIMATE not in platforms
+        and gateway_entry.gateway is not None
+        and await async_pool_available(gateway_entry.gateway)
+    ):
+        platforms.append(CLIMATE)
     # Keep order, drop duplicates.
     seen: set[str] = set()
     platforms = [p for p in platforms if not (p in seen or seen.add(p))]

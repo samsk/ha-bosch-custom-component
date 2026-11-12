@@ -92,6 +92,10 @@ data:
 
 IVT recordings: `bosch.fetch_recordings_sensor_range` with the recording `statistic_id` and a date.
 
+## Pool climate (IVT / KM200)
+
+When the gateway exposes `heatSources/poolStatus`, `poolTemperature`, and `poolSetpointTemperature`, the integration creates a **Pool** climate entity (heat/off + target temperature) as a child device of the gateway. No extra option. Reload after update. Setpoint writes need installer/write access on the gateway.
+
 ## Virtual heat-pump sensors (IVT / HTTP)
 
 **Experimental.** Derived from gateway paths, not certified Bosch diagnostics. Mode, requestors, and the efficiency hint can be wrong. Enable only if you accept that.
@@ -126,7 +130,41 @@ Requestors can overlap. `dhw` when DHW setpoint is not 0; a circuit when the com
 - **Last hour electricity / heat / backup heater** — latest completed hourly kWh
 - **hcN / dhw / pool compressor minutes today** — compressor-on time attributed to that sink
 - **hcN / dhw / pool compressor share today** — % of compressor-on time (not a Bosch per-circuit kWh meter)
-- **Heat pump efficiency hint** — `ok`, `check_backup`, `check_cop`, `check_spread`, `unknown`
+- **Heat pump efficiency hint** — coarse daily check (not a fault). Attributes include `cop_today`, `backup_share`, `outdoor`, `cop_min`, `spread`. States:
+  - `unknown` — not enough data yet (consumed today under 1 kWh, or produced missing)
+  - `check_backup` — e-heater is ≥ 20% of today's electricity
+  - `check_cop` — COP today below the outdoor-based floor (≥5 °C → 2.8; ≥0 °C → 2.3; ≥−7 °C → 1.8; colder → 1.5; unknown outdoor → 2.3)
+  - `check_spread` — compressor on but |supply − return| under 1 °C
+  - `ok` — none of the above
+
+### If the efficiency hint is not `ok`
+
+These are hints for investigation, not Bosch error codes. Compare with the Bosch / MyBuderus app and outdoor weather before changing settings.
+
+**`unknown`**
+- Wait until the hourly recording pull has run (about an hour, or after `:06`) and today has ≥ 1 kWh consumed.
+- Confirm energy monitoring / recording sensors are enabled and updating.
+- Early morning or after a reload with empty day totals is normal.
+
+**`check_backup`**
+- Backup (e-heater) is covering a large share of electricity — expensive and expected in deep cold, less so in mild weather.
+- Check whether DHW or space setpoints force high flow temps the compressor cannot meet alone.
+- Look at quiet hours / “boost” / legionella or forced electric modes on the controller.
+- If outdoor is mild and backup keeps running, check defrost cycles, low refrigerant symptoms (via installer), or oversized DHW demand.
+
+**`check_cop`**
+- Today’s produced/consumed ratio is below the outdoor floor in the entity attributes (`cop_today` vs `cop_min`).
+- Confirm `produced_kwh` / `consumed_kwh` on the COP sensor match the Bosch app; wrong series would fake a bad COP.
+- Typical causes: high flow temperature, frequent short cycles, heavy DHW, icing/defrost, or backup already in the mix (often with `check_backup`).
+- Overlapping demand can hurt COP: DHW charge + several HCs / pool at once forces higher power and less efficient operating points. Prefer fewer concurrent requestors when possible.
+- Lower supply setpoints / heating curve if comfort allows; avoid repeated manual boosts.
+
+**`check_spread`**
+- Compressor is on but supply and return are almost equal (|ΔT| &lt; 1 °C) — little heat is being delivered to the system.
+- Often a **configuration / hydraulics** issue, not a broken compressor: wrong pump curves, mixer always open, parallel circuits stealing flow, buffer bypass, or flow rate set too high/low for the heat pump.
+- Check circulation: pumps running, valves/mixers open to the circuit that is supposed to take heat, filters/strainers, air in the loop.
+- For buffer/AKU setups, confirm the heat pump is actually charging the tank (primary / requesting circuit) and not only circulating on mixers.
+- Brief spikes during mode changes are possible; a persistent low spread with modulation &gt; 0 needs installer attention (flow rate / controller config / hydraulics).
 
 # Help
 
