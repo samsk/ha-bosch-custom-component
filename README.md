@@ -57,7 +57,7 @@ If you have troubles, go to **wiki** and read more detailed installation instruc
 Device **Configure** options:
 
 - **Use new statistic API** — write EasyControl energy and IVT recordings into Home Assistant long-term statistics (Energy dashboard). Entities show `-17` by default; use `recording:…external` on the Energy dashboard.
-- **Show last-hour recording values** — optional; with the new statistic API, show the last settled hour on recording entities (hour-shifted) instead of `-17`. Default off.
+- **Show last-hour recording values** — optional; with the new statistic API, show the last settled hour on recording entities (hour-shifted) instead of `-17`. Default off. Temperature recordings (`routdoor_t1`, `ractualTemp`, …) always refresh entity state after the hourly pull and keep valid 0 °C hours.
 - **Energy stats repair days** — auto-reimport window (0–30, default 7, 0 disables) after EasyControl energy JSON keys change (`eCH` → `gCh`). Does not clean already-wrong data by itself.
 - **Virtual heat-pump diagnostics** — register **experimental** derived IVT heat-pump sensors. Every entity stays **disabled** until you enable it.
 

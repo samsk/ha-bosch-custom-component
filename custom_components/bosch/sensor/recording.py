@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 from .statistic_helper import StatisticHelper
 
 from ..const import VALUE
+from ..recording_temp_fix import is_temperature_unit, parse_temperature_day
 from homeassistant.components.recorder.models import (
     StatisticData,
     timestamp_to_datetime_or_none,
@@ -144,6 +145,77 @@ class RecordingSensor(StatisticHelper):
             return -17
         row = self._current_row()
         return row.get(VALUE) if row else None
+
+    @property
+    def _is_temperature_recording(self) -> bool:
+        """Whether this recording is temperature (°C), not energy."""
+        return is_temperature_unit(self._unit_of_measurement)
+
+    def _recording_path(self) -> str | None:
+        """Gateway recordings path for interval queries."""
+        path = getattr(self._bosch_object, "path", None)
+        return str(path) if path else None
+
+    async def _async_fetch_temp_day(self, day: datetime) -> list[dict[str, Any]]:
+        """Fetch one day of temperature hours, keeping valid 0 °C."""
+        path = self._recording_path()
+        if not path:
+            return []
+        local_day = dt_util.start_of_local_day(day)
+        interval = local_day.strftime("%Y-%m-%d")
+        try:
+            payload = await self._gateway.raw_query(
+                path=f"{path}?interval={interval}"
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "Temp recording fetch failed for %s %s: %s",
+                self.statistic_id,
+                interval,
+                err,
+            )
+            return []
+        if not isinstance(payload, dict):
+            return []
+        return parse_temperature_day(payload, day=local_day)
+
+    async def _async_refresh_temperature_hours(self) -> None:
+        """Replace client-skipped 0 °C hours with a full day parse."""
+        now = dt_util.now()
+        rows = await self._async_fetch_temp_day(now)
+        if not rows:
+            return
+        try:
+            self._bosch_object.state = rows
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug(
+                "Could not set temperature hours on %s", self.statistic_id
+            )
+
+    async def async_update_recording(self) -> None:
+        """Refresh temp hours (keep 0 °C), then stats + entity state."""
+        if self._is_temperature_recording:
+            await self._async_refresh_temperature_hours()
+        await super().async_update_recording()
+
+    async def fetch_past_data(
+        self, start_time: datetime, stop_time: datetime
+    ) -> dict[Any, Any]:
+        """Fetch range; temperature keeps 0 °C hours (energy unchanged)."""
+        if not self._is_temperature_recording:
+            return await super().fetch_past_data(
+                start_time=start_time, stop_time=stop_time
+            )
+        start_time = dt_util.start_of_local_day(start_time)
+        out: dict[Any, Any] = {}
+        current = start_time
+        while current < stop_time:
+            for row in await self._async_fetch_temp_day(current):
+                stamp = row["d"]
+                if start_time <= stamp <= stop_time:
+                    out[stamp] = row
+            current += timedelta(days=1)
+        return out
 
     async def _upsert_past_statistics(
         self, start: datetime, stop: datetime
