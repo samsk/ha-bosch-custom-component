@@ -17,6 +17,7 @@ from homeassistant.components.recorder.models import (
     StatisticData,
     timestamp_to_datetime_or_none,
 )
+from homeassistant.components.sensor import SensorStateClass
 from homeassistant.util import dt as dt_util
 
 _LOGGER = logging.getLogger(__name__)
@@ -81,10 +82,10 @@ class RecordingSensor(StatisticHelper):
 
     @property
     def last_reset(self) -> datetime | None:
-        """Start of the hour for total energy only (not temperature)."""
-        # HA rejects last_reset on state_class measurement — temp recordings
-        # (outdoor_t1, actualTemp) use measurement and failed to add entirely.
-        if not self._show_shifted_state or self._is_temperature_recording:
+        """Start of the hour; only for state_class total (HA forbids otherwise)."""
+        if self.state_class != SensorStateClass.TOTAL:
+            return None
+        if not self._show_shifted_state:
             return None
         row = self._current_row()
         return row["d"] if row else self._last_full_hour()
