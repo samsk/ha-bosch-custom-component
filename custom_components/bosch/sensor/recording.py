@@ -81,6 +81,17 @@ class RecordingSensor(StatisticHelper):
         return (not self._new_stats_api) or self._recording_shifted_state
 
     @property
+    def state_class(self) -> SensorStateClass | None:
+        """No entity LTS when external recording:* stats are used.
+
+        Otherwise statistics-graph on sensor.* shows -17 then a few hourly
+        samples instead of the long recording:* series.
+        """
+        if self._new_stats_api:
+            return None
+        return cast(SensorStateClass | None, self._attr_state_class)
+
+    @property
     def last_reset(self) -> datetime | None:
         """Start of the hour; only for state_class total (HA forbids otherwise)."""
         if self.state_class != SensorStateClass.TOTAL:
