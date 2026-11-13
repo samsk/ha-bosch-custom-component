@@ -32,6 +32,14 @@ def test_environment_kwh() -> None:
     assert rm.environment_kwh(None, 2.0) is None
 
 
+def test_degree_hours() -> None:
+    """HDH is max(0, base − outdoor); missing outdoor is None."""
+    assert rm.degree_hours(20.0) == 0.0
+    assert rm.degree_hours(5.0) == 10.0
+    assert rm.degree_hours(None) is None
+    assert rm.degree_hours(-5.0, base_c=15.0) == 20.0
+
+
 def test_recompute_hourly_tail_delta() -> None:
     """Changing one hour rewrites that hour and later sums."""
     states = {100.0: 2.0, 200.0: 4.0, 300.0: 1.0}

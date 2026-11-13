@@ -196,9 +196,11 @@ class BoschDataUpdateCoordinator(DataUpdateCoordinator):
                     for entity in entities:
                         tg.create_task(self._async_push_recording_entity(entity))
                 _LOGGER.debug("Bosch 1-hour entities updated.")
+            from .degree_hours import async_update_hdh_tail
             from .environment_energy import async_update_environment_tail
 
             await async_update_environment_tail(self.hass)
+            await async_update_hdh_tail(self.hass)
             # Refresh virtual COP / diagnostics that read recording objects.
             self.async_set_updated_data(
                 self.data if self.data is not None else True

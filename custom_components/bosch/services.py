@@ -295,7 +295,8 @@ def async_register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
     )
 
     async def async_handle_backfill_environment(service_call: ServiceCall) -> None:
-        """Backfill derived environment energy from produced/compressor stats."""
+        """Backfill derived environment and HDH from existing recording stats."""
+        from .degree_hours import async_backfill_hdh
         from .environment_energy import async_backfill_environment
 
         start_date = service_call.data["start_date"]
@@ -309,6 +310,7 @@ def async_register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
         await async_backfill_environment(
             hass, start_date=start_date, end_date=end_date
         )
+        await async_backfill_hdh(hass, start_date=start_date, end_date=end_date)
 
     hass.services.async_register(
         DOMAIN,

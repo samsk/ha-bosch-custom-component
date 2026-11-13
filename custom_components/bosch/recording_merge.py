@@ -12,6 +12,13 @@ def environment_kwh(produced: float | None, compressor: float | None) -> float |
     return max(0.0, float(produced) - float(compressor or 0.0))
 
 
+def degree_hours(outdoor: float | None, *, base_c: float = 15.0) -> float | None:
+    """Heating degree-hours for one hour, or None when outdoor is missing."""
+    if outdoor is None:
+        return None
+    return max(0.0, float(base_c) - float(outdoor))
+
+
 def recompute_hourly_tail(
     hour_states: dict[float, float],
     *,

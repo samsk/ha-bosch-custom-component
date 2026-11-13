@@ -90,6 +90,27 @@ data:
   reimport: true
 ```
 
+Bosch does not publish an “environment” recording. The integration derives:
+
+`recording:renvironmentexternal` = `max(0, outputProduced − compressor)` per hour
+
+It also derives heating degree-hours from the outdoor recording (base 15 °C):
+
+`recording:rheatingdegreehoursexternal` = `max(0, 15 − outdoor_hour)` per hour (`°C·h`)
+
+Chart compressor or produced against HDH; the slope is roughly **kWh per degree-hour** (weather-normalized efficiency).
+
+Optional backfill of past days from existing statistics (environment + HDH; long ranges are chunked automatically):
+
+```yaml
+service: bosch.backfill_environment_energy
+target:
+  device_id: <your bosch gateway device id>
+data:
+  start_date: "2024-06-01"
+  end_date: "2026-11-13"
+```
+
 IVT recordings: `bosch.fetch_recordings_sensor_range` with the recording `statistic_id` and a date.
 
 ## Pool climate (IVT / KM200)
@@ -124,7 +145,7 @@ Requestors can overlap. `dhw` when DHW setpoint is not 0; a circuit when the com
 - **hcN requesting heat** — one binary sensor per heating circuit
 - **hcN room sensor fault** — room temperature at or below −50 °C (one per circuit)
 - **Heat source delta** — supply minus return (°C)
-- **COP today** — produced heat / compressor electricity (IVA “Heat pump” slice). Attributes: `produced_kwh`, `compressor_kwh`
+- **COP today** — produced heat / compressor electricity. Attributes: `produced_kwh`, `compressor_kwh`
 - **COP month / year** — produced heat / consumed electricity (no compressor period totals)
 - **Backup heater share today / month / year** — e-heater / consumed electricity (%)
 - **Backup heater used today** — e-heater today above 0
@@ -155,28 +176,7 @@ These are hints for investigation, not Bosch error codes. Compare with the Bosch
 
 **`check_cop`**
 - Today’s produced/compressor ratio is below the outdoor floor in the entity attributes (`cop_today` vs `cop_min`).
-- Confirm `produced_kwh` / `compressor_kwh` on the COP today sensor match the IVA app (Heat pump + Environment = Sum); wrong series would fake a bad COP.
-
-### Energy dashboard (IVA-like produced stack)
-
-Bosch does not publish an “environment” recording. The integration derives:
-
-`recording:renvironmentexternal` = `max(0, outputProduced − compressor)` per hour
-
-1. Energy → Individual devices: add **Stats rcompressor** (`recording:rcompressorexternal`) and **Stats rEnvironment** (`recording:renvironmentexternal`).
-2. Remove **Stats routputProduced** from that card (stacking it with compressor double-counts).
-3. Optional backfill of past days from existing produced/compressor statistics (max 90 days):
-
-```yaml
-service: bosch.backfill_environment_energy
-target:
-  device_id: <your bosch gateway device id>
-data:
-  start_date: "2026-11-01"
-  end_date: "2026-11-13"
-```
-
-Day COP omits the newest closed hour until the next `:06` recording pull so provisional Bosch samples can settle. Empty new-day totals become `0` (COP `unknown`) instead of yesterday’s kWh.
+- Confirm `produced_kwh` / `compressor_kwh` on the COP today sensor app (Heat pump + Environment = Sum); wrong series would fake a bad COP.
 - Typical causes: high flow temperature, frequent short cycles, heavy DHW, icing/defrost, or backup already in the mix (often with `check_backup`).
 - Overlapping demand can hurt COP: DHW charge + several HCs / pool at once forces higher power and less efficient operating points. Prefer fewer concurrent requestors when possible.
 - Lower supply setpoints / heating curve if comfort allows; avoid repeated manual boosts.

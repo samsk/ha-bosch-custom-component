@@ -24,7 +24,7 @@ _LOGGER = logging.getLogger(__name__)
 PRODUCED_STAT_ID = "recording:routputproducedexternal"
 COMPRESSOR_STAT_ID = "recording:rcompressorexternal"
 ENVIRONMENT_STAT_ID = "recording:renvironmentexternal"
-MAX_BACKFILL_DAYS = 90
+MAX_BACKFILL_DAYS = 400
 
 __all__ = [
     "ENVIRONMENT_STAT_ID",
@@ -182,17 +182,35 @@ async def async_backfill_environment(
     start_date: date,
     end_date: date,
 ) -> int:
-    """Backfill environment stats for inclusive local dates. Returns hours written."""
+    """Backfill environment stats for inclusive local dates. Returns hours written.
+
+    Large ranges are processed in ``MAX_BACKFILL_DAYS`` chunks so the recorder
+    query stays bounded.
+    """
     if end_date < start_date:
         raise ValueError("end_date must be on or after start_date")
-    span = (end_date - start_date).days + 1
-    if span > MAX_BACKFILL_DAYS:
-        raise ValueError(f"range exceeds {MAX_BACKFILL_DAYS} days")
-    start = dt_util.start_of_local_day(datetime.combine(start_date, datetime.min.time()))
-    end = dt_util.start_of_local_day(
-        datetime.combine(end_date, datetime.min.time())
-    ) + timedelta(days=1)
-    written = await async_write_environment_range(hass, start=start, end=end)
+    written = 0
+    chunk_start = start_date
+    while chunk_start <= end_date:
+        chunk_end = min(
+            chunk_start + timedelta(days=MAX_BACKFILL_DAYS - 1),
+            end_date,
+        )
+        start = dt_util.start_of_local_day(
+            datetime.combine(chunk_start, datetime.min.time())
+        )
+        end = dt_util.start_of_local_day(
+            datetime.combine(chunk_end, datetime.min.time())
+        ) + timedelta(days=1)
+        part = await async_write_environment_range(hass, start=start, end=end)
+        written += part
+        _LOGGER.debug(
+            "Environment backfill chunk %s..%s wrote %s hours",
+            chunk_start,
+            chunk_end,
+            part,
+        )
+        chunk_start = chunk_end + timedelta(days=1)
     _LOGGER.info(
         "Backfilled %s environment hours from %s to %s",
         written,

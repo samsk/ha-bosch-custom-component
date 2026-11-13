@@ -86,8 +86,9 @@ clear_energy_statistics:
         boolean:
 backfill_environment_energy:
   description: >-
-    Rebuild recording:renvironmentexternal from existing produced and compressor
-    hourly statistics for a local date range (inclusive). Max 90 days.
+    Rebuild recording:renvironmentexternal and
+    recording:rheatingdegreehoursexternal from existing hourly statistics for a
+    local date range (inclusive). Long ranges are processed in 400-day chunks.
   target:
     device:
       integration: bosch
