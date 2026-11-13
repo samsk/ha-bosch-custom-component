@@ -84,6 +84,26 @@ clear_energy_statistics:
       default: false
       selector:
         boolean:
+backfill_environment_energy:
+  description: >-
+    Rebuild recording:renvironmentexternal from existing produced and compressor
+    hourly statistics for a local date range (inclusive). Max 90 days.
+  target:
+    device:
+      integration: bosch
+  fields:
+    start_date:
+      name: Start date
+      description: First local day to backfill
+      required: true
+      selector:
+        date:
+    end_date:
+      name: End date
+      description: Last local day to backfill
+      required: true
+      selector:
+        date:
 set_dhw_charge:
   description: Charge DHW circuit.
   target:

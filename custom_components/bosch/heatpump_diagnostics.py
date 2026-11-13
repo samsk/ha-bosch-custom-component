@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any
 
 # Room sensor sentinel / impossible reading (e.g. -3276.8).
@@ -87,9 +88,11 @@ class HeatpumpSnapshot:
     eheater_today: float | None = None
     eheater_month: float | None = None
     eheater_year: float | None = None
+    compressor_today: float | None = None
     last_hour_electricity: float | None = None
     last_hour_heat: float | None = None
     last_hour_eheater: float | None = None
+    last_hour_compressor: float | None = None
 
     @property
     def is_heatpump(self) -> bool:
@@ -235,9 +238,14 @@ class HeatpumpSnapshot:
         return round(num / den, 2)
 
     def cop(self, period: str) -> float | None:
-        """COP for today/month/year."""
+        """COP for today/month/year.
+
+        Today uses compressor kWh (IVA heat-pump slice). Month/year still
+        use consumed electricity (no compressor period totals).
+        """
+        if period == "today":
+            return self._ratio(self.produced_today, self.compressor_today)
         mapping = {
-            "today": (self.produced_today, self.consumed_today),
             "month": (self.produced_month, self.consumed_month),
             "year": (self.produced_year, self.consumed_year),
         }
@@ -406,9 +414,13 @@ def _recording_hour(index: dict[str, Any], marker: str) -> float | None:
     return None
 
 
-def build_snapshot_from_path_map(path_values: dict[str, Any]) -> HeatpumpSnapshot:
+def build_snapshot_from_path_map(
+    path_values: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> HeatpumpSnapshot:
     """Build snapshot from path → raw value map (tests and gateway adapter)."""
-    path_values = _with_recording_today_totals(path_values)
+    path_values = _with_recording_today_totals(path_values, now=now)
     index = {p.lstrip("/"): v for p, v in path_values.items()}
 
     circuits: list[CircuitSnapshot] = []
@@ -541,9 +553,16 @@ def build_snapshot_from_path_map(path_values: dict[str, Any]) -> HeatpumpSnapsho
                 "recordings/heatSources/total/energyMonitoring/eheater_ThisYear_kWh",
             )
         ),
+        compressor_today=_as_float(
+            _path_value(
+                index,
+                "recordings/heatSources/total/energyMonitoring/compressor_Today_kWh",
+            )
+        ),
         last_hour_electricity=_recording_hour(index, "consumedEnergy"),
         last_hour_heat=_recording_hour(index, "outputProduced"),
         last_hour_eheater=_recording_hour(index, "eheater"),
+        last_hour_compressor=_recording_hour(index, "compressor"),
     )
 
 
@@ -650,23 +669,89 @@ def _obj_path_values(obj: Any) -> dict[str, Any]:
     return _with_recording_today_totals(out)
 
 
+def _recording_hour_rows(value: Any) -> list[Any] | None:
+    """Hourly recording rows, or None when value is not a list payload."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict) and isinstance(value.get("value"), list):
+        return value["value"]
+    return None
+
+
+def _stamp_datetime(stamp: Any) -> datetime | None:
+    """Parse a recording stamp to datetime."""
+    if isinstance(stamp, datetime):
+        return stamp
+    if stamp is None:
+        return None
+    text = str(stamp).replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _day_key(stamp: Any) -> str | None:
+    """YYYY-MM-DD for a recording stamp."""
+    parsed = _stamp_datetime(stamp)
+    if parsed is not None:
+        return parsed.date().isoformat()
+    text = str(stamp)
+    return text[:10] if len(text) >= 10 else None
+
+
+def _sum_hour_rows_local_today(
+    value: Any,
+    *,
+    now: datetime | None = None,
+) -> float | None:
+    """Sum numeric hourly rows for local today, excluding the newest closed hour.
+
+    Returns 0.0 when a list exists but today has no settled numeric rows.
+    Returns None when value is not an hourly list.
+    """
+    rows = _recording_hour_rows(value)
+    if rows is None:
+        return None
+    clock = now or datetime.now().astimezone()
+    today = clock.date().isoformat()
+    last_full = clock.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    if last_full.tzinfo is None and clock.tzinfo is not None:
+        last_full = last_full.replace(tzinfo=clock.tzinfo)
+    total = 0.0
+    found = False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        stamp = row.get("d")
+        if stamp is None or _day_key(stamp) != today:
+            continue
+        parsed = _stamp_datetime(stamp)
+        if parsed is not None:
+            if parsed.tzinfo is None and last_full.tzinfo is not None:
+                parsed = parsed.replace(tzinfo=last_full.tzinfo)
+            if parsed >= last_full:
+                continue
+        number = _as_float(row.get("value", row.get("y")))
+        if number is None:
+            continue
+        total += number
+        found = True
+    return round(total, 2) if found else 0.0
+
+
 def _sum_hour_rows_latest_day(value: Any) -> float | None:
     """Sum numeric hourly rows for the latest calendar day only."""
-    rows: list[Any] | None = None
-    if isinstance(value, list):
-        rows = value
-    elif isinstance(value, dict) and isinstance(value.get("value"), list):
-        rows = value["value"]
+    rows = _recording_hour_rows(value)
     if not rows:
         return None
     latest_day: str | None = None
     for row in rows:
         if not isinstance(row, dict):
             continue
-        stamp = row.get("d")
-        if stamp is None:
+        day = _day_key(row.get("d"))
+        if day is None:
             continue
-        day = str(stamp)[:10]
         if latest_day is None or day > latest_day:
             latest_day = day
     if latest_day is None:
@@ -676,8 +761,7 @@ def _sum_hour_rows_latest_day(value: Any) -> float | None:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        stamp = row.get("d")
-        if stamp is None or str(stamp)[:10] != latest_day:
+        if _day_key(row.get("d")) != latest_day:
             continue
         number = _as_float(row.get("value", row.get("y")))
         if number is None:
@@ -687,18 +771,26 @@ def _sum_hour_rows_latest_day(value: Any) -> float | None:
     return round(total, 2) if found else None
 
 
-def _with_recording_today_totals(path_values: dict[str, Any]) -> dict[str, Any]:
-    """Expose hourly energy lists as ``*_Today_kWh`` without overwriting scalars."""
+def _with_recording_today_totals(
+    path_values: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Expose hourly energy lists as ``*_Today_kWh``.
+
+    When an hourly list exists it wins over a scalar ``*_Today_kWh`` so a
+    stale Bosch daily total cannot override an empty new local day.
+    """
     extra: dict[str, Any] = {}
     for path, value in path_values.items():
         if "Today" in path:
             continue
         if "energyMonitoring" not in path:
             continue
-        key = f"{path}_Today_kWh"
-        if key in path_values and _as_float(path_values[key]) is not None:
+        if _recording_hour_rows(value) is None:
             continue
-        total = _sum_hour_rows_latest_day(value)
+        key = f"{path}_Today_kWh"
+        total = _sum_hour_rows_local_today(value, now=now)
         if total is None:
             continue
         extra[key] = total

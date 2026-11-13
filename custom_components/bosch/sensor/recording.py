@@ -229,7 +229,7 @@ class RecordingSensor(StatisticHelper):
     def append_statistics(
         self, stats: list[Any] | None, sum: float, now: datetime
     ) -> float:
-        """Append hourly recording rows as external statistics."""
+        """Append hourly recording rows as external statistics (initial import)."""
         statistics_to_push: list[StatisticData] = []
         if not stats:
             return sum
@@ -267,6 +267,72 @@ class RecordingSensor(StatisticHelper):
         self.add_external_stats(stats=statistics_to_push)
         self._last_reset = now
         return sum
+
+    async def async_upsert_statistics(
+        self, stats: list[Any] | None, now: datetime
+    ) -> None:
+        """Upsert hourly rows and recompute cumulative sums from the first change."""
+        from ..recording_merge import (
+            anchor_sum_before,
+            first_changed_hour,
+            merge_hour_states,
+            recompute_hourly_tail,
+            rows_to_maps,
+        )
+
+        if not stats:
+            return
+        incoming: dict[float, float] = {}
+        starts: dict[float, datetime] = {}
+        for stat in stats:
+            _date: datetime = stat["d"]
+            raw = stat.get("value")
+            try:
+                _state = float(raw)
+            except (TypeError, ValueError):
+                if not getattr(self, "_non_numeric_stat_logged", False):
+                    self._non_numeric_stat_logged = True
+                    _LOGGER.warning(
+                        "Recording %s skipped non-numeric value %r",
+                        self.statistic_id,
+                        raw,
+                    )
+                continue
+            ts = float(dt_util.as_timestamp(_date))
+            starts[ts] = _date
+            incoming[ts] = _state
+        if not incoming:
+            return
+        first_ts = min(incoming)
+        existing = await self.get_stats_from_ha_db(
+            start_time=dt_util.utc_from_timestamp(first_ts) - timedelta(hours=1),
+            end_time=now + timedelta(hours=1),
+        )
+        existing_states, existing_sums = rows_to_maps(existing.get(self.statistic_id))
+        # New zero hours stay omitted; revisions to an existing hour keep zeros.
+        trimmed = {
+            ts: state
+            for ts, state in incoming.items()
+            if state != 0 or ts in existing_states
+        }
+        if not trimmed:
+            return
+        change_ts = first_changed_hour(existing_states, trimmed)
+        if change_ts is None:
+            return
+        merged = merge_hour_states(existing_states, trimmed)
+        anchor = anchor_sum_before(existing_sums, change_ts)
+        tail = recompute_hourly_tail(merged, from_ts=change_ts, anchor_sum=anchor)
+        statistics_to_push = [
+            StatisticData(
+                start=starts.get(ts) or dt_util.utc_from_timestamp(ts),
+                state=state,
+                sum=total,
+            )
+            for ts, state, total in tail
+        ]
+        self.add_external_stats(stats=statistics_to_push)
+        self._last_reset = now
 
     async def _insert_statistics(self) -> None:
         """Insert external statistics."""
@@ -361,7 +427,7 @@ class RecordingSensor(StatisticHelper):
                     _sum = cast(float, last_stats_row.get("sum", 0.0))
                 return list(state), _sum
 
-            # Append when we have a last row, even if the window query is empty.
+            # Upsert when we have a last row, even if the window query is empty.
             bosch_stats, _sum = await get_last_stats_from_bosch_api()
-            self.append_statistics(stats=bosch_stats, sum=_sum, now=now)
+            await self.async_upsert_statistics(stats=bosch_stats, now=now)
 

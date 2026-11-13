@@ -15,6 +15,7 @@ from .const import (
     SERVICE_UPDATE,
     BOSCH_GATEWAY_ENTRY,
     RECORDING_SERVICE_UPDATE,
+    SERVICE_BACKFILL_ENVIRONMENT,
     SERVICE_PUT_STRING,
     SERVICE_PUT_FLOAT,
     SERVICE_GET,
@@ -43,6 +44,12 @@ SERVICE_CLEAR_ENERGY_SCHEMA = SERVICE_INTEGRATION_SCHEMA.extend(
     {
         vol.Required("statistic_id"): str,
         vol.Optional("reimport", default=False): cv.boolean,
+    }
+)
+SERVICE_BACKFILL_ENVIRONMENT_SCHEMA = SERVICE_INTEGRATION_SCHEMA.extend(
+    {
+        vol.Required("start_date"): cv.date,
+        vol.Required("end_date"): cv.date,
     }
 )
 SERVICE_PUT_STRING_SCHEMA = SERVICE_GET_SCHEMA.extend({vol.Required(VALUE): str})
@@ -287,6 +294,29 @@ def async_register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
         SERVICE_CLEAR_ENERGY_SCHEMA,
     )
 
+    async def async_handle_backfill_environment(service_call: ServiceCall) -> None:
+        """Backfill derived environment energy from produced/compressor stats."""
+        from .environment_energy import async_backfill_environment
+
+        start_date = service_call.data["start_date"]
+        end_date = service_call.data["end_date"]
+        _gateway_entries = find_gateway_entry(
+            hass=hass, devices_id=service_call.data[ATTR_DEVICE_ID]
+        )
+        if not _gateway_entries:
+            return
+        # Statistic ids are shared; one backfill covers the gateway recording series.
+        await async_backfill_environment(
+            hass, start_date=start_date, end_date=end_date
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_BACKFILL_ENVIRONMENT,
+        async_handle_backfill_environment,
+        SERVICE_BACKFILL_ENVIRONMENT_SCHEMA,
+    )
+
 
 def async_remove_services(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
     """Remove the services once the last gateway is unloaded.
@@ -306,6 +336,7 @@ def async_remove_services(hass: HomeAssistant, config_entry: ConfigEntry) -> Non
         "fetch_recordings_sensor_range",
         "repair_energy_statistics",
         "clear_energy_statistics",
+        SERVICE_BACKFILL_ENVIRONMENT,
     ):
         if hass.services.has_service(DOMAIN, service):
             hass.services.async_remove(DOMAIN, service)

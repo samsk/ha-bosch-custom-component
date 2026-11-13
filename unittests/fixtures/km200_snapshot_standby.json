@@ -35,6 +35,7 @@
   "recordings/heatSources/total/energyMonitoring/consumedEnergy_Today_kWh": 23.0,
   "recordings/heatSources/total/energyMonitoring/consumedEnergy_ThisMonth_kWh": 313.81,
   "recordings/heatSources/total/energyMonitoring/consumedEnergy_ThisYear_kWh": 7820.89,
+  "recordings/heatSources/total/energyMonitoring/compressor_Today_kWh": 23.0,
   "recordings/heatSources/total/energyMonitoring/outputProduced_Today_kWh": 76.0,
   "recordings/heatSources/total/energyMonitoring/outputProduced_ThisMonth_kWh": 781.95,
   "recordings/heatSources/total/energyMonitoring/outputProduced_ThisYear_kWh": 20760.81,

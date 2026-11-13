@@ -131,6 +131,8 @@ class BoschDataUpdateCoordinator(DataUpdateCoordinator):
 
     async def _async_update_object(self, obj: BoschObject, **kwargs: Any) -> bool:
         """Update a single Bosch object; return whether it succeeded."""
+        keep_hours = _is_energy_monitoring(obj)
+        previous_state = getattr(obj, "state", None) if keep_hours else None
         try:
             _LOGGER.debug("Updating Bosch object: %s", obj.name)
             await obj.update(**kwargs)
@@ -140,6 +142,20 @@ class BoschDataUpdateCoordinator(DataUpdateCoordinator):
         except Exception as err:
             _LOGGER.warning("Unexpected error updating %s: %s", obj.name, err)
             return False
+        if (
+            keep_hours
+            and previous_state is not None
+            and _recording_has_numeric_hours(previous_state)
+            and not _recording_has_numeric_hours(getattr(obj, "state", None))
+        ):
+            _LOGGER.debug(
+                "Keeping previous numeric hours for %s after empty recording pull",
+                obj.name,
+            )
+            try:
+                obj.state = previous_state
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("Could not restore state on %s", obj.name)
         return True
 
     async def _async_push_recording_entity(self, entity: RecordingEntity) -> None:
@@ -180,6 +196,13 @@ class BoschDataUpdateCoordinator(DataUpdateCoordinator):
                     for entity in entities:
                         tg.create_task(self._async_push_recording_entity(entity))
                 _LOGGER.debug("Bosch 1-hour entities updated.")
+            from .environment_energy import async_update_environment_tail
+
+            await async_update_environment_tail(self.hass)
+            # Refresh virtual COP / diagnostics that read recording objects.
+            self.async_set_updated_data(
+                self.data if self.data is not None else True
+            )
         except Exception:
             # Without this an unexpected error would skip the reschedule below
             # and stop the hourly updates until Home Assistant is restarted.
@@ -199,3 +222,29 @@ class BoschDataUpdateCoordinator(DataUpdateCoordinator):
             self.hass, self.async_recording_sensors_update, nexti
         )
         _LOGGER.debug("Next update of 1-hour sensors scheduled at: %s", nexti)
+
+
+def _is_energy_monitoring(obj: BoschObject) -> bool:
+    """True for energyMonitoring recording objects."""
+    path = str(getattr(obj, "path", None) or getattr(obj, "attr_id", None) or "")
+    return "energyMonitoring" in path
+
+
+def _recording_has_numeric_hours(state: Any) -> bool:
+    """True when state has at least one numeric hourly row."""
+    rows = state if isinstance(state, list) else None
+    if rows is None and isinstance(state, dict):
+        value = state.get("value")
+        rows = value if isinstance(value, list) else None
+    if not rows:
+        return False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        raw = row.get("value", row.get("y"))
+        try:
+            float(raw)
+        except (TypeError, ValueError):
+            continue
+        return True
+    return False

@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -206,39 +207,45 @@ def test_efficiency_hint_branches() -> None:
 
 
 def test_last_hour_from_recording_rows() -> None:
-    """Latest hourly row is used; day totals are not treated as an hour."""
+    """Latest hourly row is used; day totals come from local today hours."""
     data = _standby()
     data["recordings/heatSources/total/energyMonitoring/consumedEnergy"] = [
         {"d": "2026-11-10T17:00:00", "value": 1.2},
         {"d": "2026-11-10T18:00:00", "value": "unavailable"},
         {"d": "2026-11-10T16:00:00", "value": 0.4},
     ]
-    snap = hp.build_snapshot_from_path_map(data)
+    # 19:00 → last full hour 18:00 excluded; 16+17 settle.
+    now = datetime(2026, 11, 10, 19, 0, 0)
+    snap = hp.build_snapshot_from_path_map(data, now=now)
     assert snap.last_hour_electricity == 1.2
-    assert snap.consumed_today == 23.0
+    assert snap.consumed_today == 1.6
 
 
-def test_today_scalar_not_overwritten_by_hourly_sum() -> None:
-    """Bosch daily total wins over a multi-day hourly recording sum."""
+def test_hourly_list_overrides_stale_today_scalar() -> None:
+    """Hourly list for local today wins over a stale *_Today_kWh scalar."""
     data = _standby()
     data["recordings/heatSources/total/energyMonitoring/consumedEnergy"] = [
-        {"d": "2026-11-09T10:00:00", "value": 10.0},
         {"d": "2026-11-10T10:00:00", "value": 5.0},
         {"d": "2026-11-10T11:00:00", "value": 5.0},
     ]
     data["recordings/heatSources/total/energyMonitoring/outputProduced"] = [
-        {"d": "2026-11-09T10:00:00", "value": 40.0},
         {"d": "2026-11-10T10:00:00", "value": 20.0},
         {"d": "2026-11-10T11:00:00", "value": 20.0},
     ]
-    snap = hp.build_snapshot_from_path_map(data)
-    assert snap.consumed_today == 23.0
-    assert snap.produced_today == 76.0
-    assert snap.cop("today") == 3.3
+    data["recordings/heatSources/total/energyMonitoring/compressor"] = [
+        {"d": "2026-11-10T10:00:00", "value": 5.0},
+        {"d": "2026-11-10T11:00:00", "value": 5.0},
+    ]
+    now = datetime(2026, 11, 10, 13, 0, 0)
+    snap = hp.build_snapshot_from_path_map(data, now=now)
+    assert snap.consumed_today == 10.0
+    assert snap.produced_today == 40.0
+    assert snap.compressor_today == 10.0
+    assert snap.cop("today") == 4.0
 
 
-def test_hourly_only_sums_latest_day() -> None:
-    """Without Today_kWh, only the latest calendar day is summed."""
+def test_hourly_sums_local_today_with_provisional_hour() -> None:
+    """Local today only; newest closed hour is excluded until the next hour."""
     data = {
         "recordings/heatSources/total/energyMonitoring/consumedEnergy": [
             {"d": "2026-11-09T10:00:00", "value": 10.0},
@@ -250,11 +257,27 @@ def test_hourly_only_sums_latest_day() -> None:
             {"d": "2026-11-10T10:00:00", "value": 5.0},
             {"d": "2026-11-10T11:00:00", "value": 7.0},
         ],
+        "recordings/heatSources/total/energyMonitoring/compressor": [
+            {"d": "2026-11-09T10:00:00", "value": 10.0},
+            {"d": "2026-11-10T10:00:00", "value": 1.5},
+            {"d": "2026-11-10T11:00:00", "value": 2.5},
+        ],
     }
-    snap = hp.build_snapshot_from_path_map(data)
-    assert snap.consumed_today == 4.0
-    assert snap.produced_today == 12.0
-    assert snap.cop("today") == 3.0
+    # 12:06 → last full hour 11:00 excluded; 10:00 settles.
+    now = datetime(2026, 11, 10, 12, 6, 0)
+    snap = hp.build_snapshot_from_path_map(data, now=now)
+    assert snap.consumed_today == 1.5
+    assert snap.produced_today == 5.0
+    assert snap.compressor_today == 1.5
+    assert snap.cop("today") == 3.33
+
+    # Next hour includes 11:00.
+    later = datetime(2026, 11, 10, 13, 6, 0)
+    snap2 = hp.build_snapshot_from_path_map(data, now=later)
+    assert snap2.consumed_today == 4.0
+    assert snap2.produced_today == 12.0
+    assert snap2.compressor_today == 4.0
+    assert snap2.cop("today") == 3.0
 
 
 def test_delta_skips_recording_list_and_uses_appliance() -> None:
@@ -386,9 +409,70 @@ def test_recording_hours_become_today_total() -> None:
         ],
         kind="recording",
     )
-    snap = hp.build_snapshot_from_gateway(_FakeGw([rec]))
+    # Freeze "now" via path map (gateway helper has no now arg).
+    path_values = {
+        rec.path: [
+            {"d": "2026-11-11T10:00:00", "value": 1.5},
+            {"d": "2026-11-11T11:00:00", "value": 2.5},
+        ]
+    }
+    snap = hp.build_snapshot_from_path_map(
+        path_values, now=datetime(2026, 11, 11, 13, 0, 0)
+    )
     assert snap.consumed_today == 4.0
     assert snap.last_hour_electricity == 2.5
+
+
+def test_cop_today_uses_compressor_not_consumed() -> None:
+    """COP today divides produced by compressor kWh."""
+    data = _standby()
+    data["recordings/heatSources/total/energyMonitoring/compressor_Today_kWh"] = 2.0
+    data["recordings/heatSources/total/energyMonitoring/outputProduced_Today_kWh"] = 7.0
+    data["recordings/heatSources/total/energyMonitoring/consumedEnergy_Today_kWh"] = 1.0
+    snap = hp.build_snapshot_from_path_map(data)
+    assert snap.cop("today") == 3.5
+    assert snap.compressor_today == 2.0
+
+
+def test_empty_today_hours_are_zero_not_yesterday() -> None:
+    """Yesterday-only hours yield today totals of 0.0."""
+    data = {
+        "recordings/heatSources/total/energyMonitoring/outputProduced": [
+            {"d": "2026-11-12T22:00:00", "value": 8.0},
+        ],
+        "recordings/heatSources/total/energyMonitoring/compressor": [
+            {"d": "2026-11-12T22:00:00", "value": 2.0},
+        ],
+    }
+    snap = hp.build_snapshot_from_path_map(
+        data, now=datetime(2026, 11, 13, 1, 6, 0)
+    )
+    assert snap.produced_today == 0.0
+    assert snap.compressor_today == 0.0
+    assert snap.cop("today") is None
+
+
+def test_unavailable_today_stubs_sum_to_zero() -> None:
+    """Today rows that are only unavailable still count as empty today."""
+    data = {
+        "recordings/heatSources/total/energyMonitoring/outputProduced": [
+            {"d": "2026-11-12T22:00:00", "value": 8.0},
+            {"d": "2026-11-13T00:00:00", "value": "unavailable"},
+            {"d": "2026-11-13T01:00:00", "value": "unavailable"},
+        ],
+        "recordings/heatSources/total/energyMonitoring/compressor": [
+            {"d": "2026-11-12T22:00:00", "value": 2.0},
+            {"d": "2026-11-13T00:00:00", "value": "unavailable"},
+            {"d": "2026-11-13T01:00:00", "value": "unavailable"},
+        ],
+    }
+    snap = hp.build_snapshot_from_path_map(
+        data, now=datetime(2026, 11, 13, 1, 30, 0)
+    )
+    assert snap.produced_today == 0.0
+    assert snap.compressor_today == 0.0
+    assert snap.last_hour_heat == 8.0
+    assert snap.last_hour_compressor == 2.0
 
 
 def test_source_objects_skip_circuits_and_noise() -> None:

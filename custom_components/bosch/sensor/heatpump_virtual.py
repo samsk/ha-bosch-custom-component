@@ -561,10 +561,17 @@ def build_heatpump_virtual_entities(
                 f"Cop{period.title()}",
                 f"COP {label}",
                 lambda s, p=period: s.cop(p),
-                attrs_getter=lambda s, p=period: {
-                    "produced_kwh": getattr(s, f"produced_{p}"),
-                    "consumed_kwh": getattr(s, f"consumed_{p}"),
-                },
+                attrs_getter=lambda s, p=period: (
+                    {
+                        "produced_kwh": s.produced_today,
+                        "compressor_kwh": s.compressor_today,
+                    }
+                    if p == "today"
+                    else {
+                        "produced_kwh": getattr(s, f"produced_{p}"),
+                        "consumed_kwh": getattr(s, f"consumed_{p}"),
+                    }
+                ),
             )
         )
         entities.append(
