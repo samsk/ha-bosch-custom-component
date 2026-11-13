@@ -1,6 +1,7 @@
 """Services used in HA."""
 from __future__ import annotations
 import logging
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
@@ -30,7 +31,11 @@ _LOGGER = logging.getLogger(__name__)
 SERVICE_INTEGRATION_SCHEMA = vol.Schema({vol.Required(ATTR_DEVICE_ID): cv.ensure_list})
 SERVICE_GET_SCHEMA = SERVICE_INTEGRATION_SCHEMA.extend({vol.Required("path"): str})
 SERVICE_FETCH_RANGE_SCHEMA = SERVICE_INTEGRATION_SCHEMA.extend(
-    {vol.Required("day"): cv.date, vol.Required("statistic_id"): str}
+    {
+        vol.Required("day"): cv.date,
+        vol.Optional("end_date"): cv.date,
+        vol.Required("statistic_id"): str,
+    }
 )
 SERVICE_REPAIR_ENERGY_SCHEMA = SERVICE_INTEGRATION_SCHEMA.extend(
     {
@@ -139,9 +144,20 @@ def async_register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 await _gateway_entry.coordinator.async_recording_sensors_update()
 
     async def async_handle_recording_sensor_fetch_past(service_call: ServiceCall) -> None:
-        """Request update of recording sensor manually."""
+        """Fetch one or more past recording days into statistics (max 30)."""
         statistic_id = service_call.data.get("statistic_id")
-        day = dt_util.start_of_local_day(service_call.data.get("day"))
+        start_date = service_call.data["day"]
+        end_date = service_call.data.get("end_date") or start_date
+        if end_date < start_date:
+            _LOGGER.error("end_date must be on or after day")
+            return
+        span = (end_date - start_date).days + 1
+        if span > 30:
+            _LOGGER.error(
+                "Range exceeds 30 days (%s); narrow day..end_date",
+                span,
+            )
+            return
         _gateway_entries = find_gateway_entry(
             hass=hass, devices_id=service_call.data[ATTR_DEVICE_ID]
         )
@@ -151,14 +167,21 @@ def async_register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
             if not _gateway_entry.coordinator:
                 continue
             for entity in _gateway_entry.coordinator.recording_entities:
-                if entity.enabled and entity.statistic_id == statistic_id:
+                if not entity.enabled or entity.statistic_id != statistic_id:
+                    continue
+                current = start_date
+                while current <= end_date:
+                    day = dt_util.start_of_local_day(
+                        datetime.combine(current, datetime.min.time())
+                    )
                     _LOGGER.debug(
-                        "Fetching single day by service request. UUID: %s, statistic_id: %s, day: %s",
+                        "Fetching day by service request. UUID: %s, statistic_id: %s, day: %s",
                         _gateway_entry.uuid,
                         statistic_id,
                         day,
                     )
                     await entity.insert_statistics_range(start_time=day)
+                    current += timedelta(days=1)
 
     async def async_handle_get(service_call: ServiceCall) -> ServiceResponse:
         """Request update of recording sensor manually."""
