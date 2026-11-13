@@ -45,6 +45,9 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     enabled_sensors = config_entry.data.get(SENSORS, [])
 
     new_stats_api = config_entry.options.get("new_stats_api", False)
+    recording_shifted_state = config_entry.options.get(
+        "recording_shifted_state", False
+    )
     gateway = entry.gateway
     
     sensor_entities = []
@@ -55,6 +58,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
             kwargs = (
                 {
                     "new_stats_api": new_stats_api,
+                    "recording_shifted_state": recording_shifted_state,
                 }
                 if sensor.kind == RECORDING
                 else {}

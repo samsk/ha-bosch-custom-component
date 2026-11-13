@@ -212,6 +212,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
         entry = self.config_entry
         new_stats_api = entry.options.get("new_stats_api", False)
+        recording_shifted_state = entry.options.get(
+            "recording_shifted_state", False
+        )
         optimistic_mode = entry.options.get("optimistic_mode", False)
         scan_interval = entry.options.get("scan_interval", 60)
         energy_stats_repair_days = entry.options.get(
@@ -226,6 +229,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Optional("new_stats_api", default=new_stats_api): bool,
+                    vol.Optional(
+                        "recording_shifted_state",
+                        default=recording_shifted_state,
+                    ): bool,
                     vol.Optional("optimistic_mode", default=optimistic_mode): bool,
                     vol.Optional("scan_interval", default=scan_interval): vol.All(
                         vol.Coerce(int), vol.Range(min=30, max=3600)

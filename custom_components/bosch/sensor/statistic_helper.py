@@ -151,7 +151,6 @@ class StatisticHelper(BoschBaseSensor):
 
     def add_external_stats(self, stats: list[StatisticData]) -> None:
         """Add external statistics to Home Assistant's recorder."""
-        self._state = -17  # Indicate that data is stored externally
         if not stats:
             return
         async_add_external_statistics(self.hass, self.statistic_metadata, stats)

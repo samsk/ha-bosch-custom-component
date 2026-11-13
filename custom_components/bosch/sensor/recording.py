@@ -39,6 +39,7 @@ class RecordingSensor(StatisticHelper):
         attr_uri: str,
         is_enabled: bool = False,
         new_stats_api: bool = False,
+        recording_shifted_state: bool = False,
     ) -> None:
         """Initialize Recording sensor."""
         super().__init__(
@@ -51,6 +52,7 @@ class RecordingSensor(StatisticHelper):
             is_enabled=is_enabled,
             new_stats_api=new_stats_api,
         )
+        self._recording_shifted_state = recording_shifted_state
         self._unit_of_measurement = bosch_object.unit_of_measurement
         self._stale_logged = False
         self._non_numeric_stat_logged = False
@@ -72,9 +74,14 @@ class RecordingSensor(StatisticHelper):
         )
 
     @property
+    def _show_shifted_state(self) -> bool:
+        """Whether entity shows last-hour values (vs -17 with new stats API)."""
+        return (not self._new_stats_api) or self._recording_shifted_state
+
+    @property
     def last_reset(self) -> datetime | None:
         """Start of the hour the value covers (state_class total)."""
-        if self._new_stats_api:
+        if not self._show_shifted_state:
             return None
         row = self._current_row()
         return row["d"] if row else self._last_full_hour()
@@ -132,10 +139,9 @@ class RecordingSensor(StatisticHelper):
         return None
 
     def _native_value(self) -> Any:
-        """Return the raw state of the sensor."""
-        if self._new_stats_api:
-            return -17 # Legend state for external stats
-
+        """Return last-hour value, or -17 when new stats API hides entity state."""
+        if not self._show_shifted_state:
+            return -17
         row = self._current_row()
         return row.get(VALUE) if row else None
 
