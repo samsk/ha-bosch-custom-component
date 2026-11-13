@@ -81,8 +81,10 @@ class RecordingSensor(StatisticHelper):
 
     @property
     def last_reset(self) -> datetime | None:
-        """Start of the hour the value covers (state_class total)."""
-        if not self._show_shifted_state:
+        """Start of the hour for total energy only (not temperature)."""
+        # HA rejects last_reset on state_class measurement — temp recordings
+        # (outdoor_t1, actualTemp) use measurement and failed to add entirely.
+        if not self._show_shifted_state or self._is_temperature_recording:
             return None
         row = self._current_row()
         return row["d"] if row else self._last_full_hour()
