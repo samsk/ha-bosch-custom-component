@@ -86,14 +86,16 @@ class StatisticHelper(BoschBaseSensor):
 
     async def async_update_recording(self) -> None:
         """Push freshly fetched recording data to HA (called hourly)."""
-        if self._uses_external_statistics:
-            _LOGGER.debug(
-                "Invoking external statistic function for %s.", self.statistic_id
-            )
-            await self._insert_statistics()
-        # Always refresh entity state (temps stayed restored/unavailable when
-        # external import wrote no rows).
-        self.async_write_ha_state()
+        try:
+            if self._uses_external_statistics:
+                _LOGGER.debug(
+                    "Invoking external statistic function for %s.", self.statistic_id
+                )
+                await self._insert_statistics()
+        finally:
+            # Always refresh entity state, even if stats import fails (temps
+            # stayed restored/unavailable when insert raised or wrote nothing).
+            self.async_write_ha_state()
 
     async def _insert_statistics(self) -> None:
         """Insert external statistics. Must be implemented by subclasses."""

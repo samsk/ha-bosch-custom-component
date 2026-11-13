@@ -163,33 +163,60 @@ class RecordingSensor(StatisticHelper):
             return []
         local_day = dt_util.start_of_local_day(day)
         interval = local_day.strftime("%Y-%m-%d")
+        uri = f"{path}?interval={interval}"
+        payload: Any = None
         try:
-            payload = await self._gateway.raw_query(
-                path=f"{path}?interval={interval}"
-            )
+            payload = await self._gateway.raw_query(path=uri)
         except Exception as err:  # noqa: BLE001
-            _LOGGER.debug(
-                "Temp recording fetch failed for %s %s: %s",
+            _LOGGER.warning(
+                "Temp recording fetch failed for %s (%s): %s",
                 self.statistic_id,
-                interval,
+                uri,
                 err,
             )
             return []
         if not isinstance(payload, dict):
+            _LOGGER.warning(
+                "Temp recording bad payload for %s: %s",
+                self.statistic_id,
+                type(payload).__name__,
+            )
             return []
         return parse_temperature_day(payload, day=local_day)
+
+    def _set_temperature_hours(self, rows: list[dict[str, Any]]) -> bool:
+        """Write hour rows into the client object RESULT (state setter is RO)."""
+        attr = getattr(self._bosch_object, "attr_id", None) or self._attr_uri
+        data = getattr(self._bosch_object, "_data", None)
+        if not isinstance(data, dict) or attr not in data:
+            _LOGGER.warning(
+                "Cannot store temp hours for %s (missing client _data)",
+                self.statistic_id,
+            )
+            return False
+        bucket = data[attr]
+        if not isinstance(bucket, dict):
+            return False
+        result = bucket.setdefault("result", {})
+        result[VALUE] = rows
+        return True
 
     async def _async_refresh_temperature_hours(self) -> None:
         """Replace client-skipped 0 °C hours with a full day parse."""
         now = dt_util.now()
         rows = await self._async_fetch_temp_day(now)
         if not rows:
+            _LOGGER.warning(
+                "No temperature hours for %s (path=%s)",
+                self.statistic_id,
+                self._recording_path(),
+            )
             return
-        try:
-            self._bosch_object.state = rows
-        except Exception:  # noqa: BLE001
+        if self._set_temperature_hours(rows):
             _LOGGER.debug(
-                "Could not set temperature hours on %s", self.statistic_id
+                "Loaded %s temperature hours for %s",
+                len(rows),
+                self.statistic_id,
             )
 
     async def async_update_recording(self) -> None:
