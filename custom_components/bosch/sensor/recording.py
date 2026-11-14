@@ -58,6 +58,9 @@ class RecordingSensor(StatisticHelper):
         self._unit_of_measurement = bosch_object.unit_of_measurement
         self._stale_logged = False
         self._non_numeric_stat_logged = False
+        # Display-only when external recording:* LTS is used; avoid sensor.* LTS.
+        if new_stats_api:
+            self._attr_state_class = None
 
     @property
     def device_name(self) -> str:
@@ -80,16 +83,21 @@ class RecordingSensor(StatisticHelper):
         """Whether entity shows last-hour values (vs -17 with new stats API)."""
         return (not self._new_stats_api) or self._recording_shifted_state
 
-    @property
-    def state_class(self) -> SensorStateClass | None:
-        """No entity LTS when external recording:* stats are used.
+    async def async_added_to_hass(self) -> None:
+        """Drop orphaned sensor.* LTS left from older state_class=total runs."""
+        await super().async_added_to_hass()
+        if not self._new_stats_api or not self.entity_id:
+            return
+        try:
+            from ..recorder_compat import async_clear_statistics_range
 
-        Otherwise statistics-graph on sensor.* shows -17 then a few hourly
-        samples instead of the long recording:* series.
-        """
-        if self._new_stats_api:
-            return None
-        return cast(SensorStateClass | None, self._attr_state_class)
+            await async_clear_statistics_range(self.hass, [self.entity_id])
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            _LOGGER.debug(
+                "Could not clear orphaned entity statistics for %s",
+                self.entity_id,
+                exc_info=True,
+            )
 
     @property
     def last_reset(self) -> datetime | None:

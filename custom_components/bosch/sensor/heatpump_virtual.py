@@ -9,7 +9,11 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.const import (
     PERCENTAGE,
     UnitOfEnergy,
@@ -342,6 +346,7 @@ class HeatpumpNumericSensor(_HeatpumpVirtualBase, SensorEntity):
         *,
         unit: str | None = None,
         device_class: SensorDeviceClass | None = None,
+        state_class: SensorStateClass | None = SensorStateClass.MEASUREMENT,
         attrs_getter: Callable[[HeatpumpSnapshot], dict[str, Any]] | None = None,
     ) -> None:
         """Initialize numeric virtual sensor."""
@@ -349,6 +354,7 @@ class HeatpumpNumericSensor(_HeatpumpVirtualBase, SensorEntity):
         self._getter = getter
         self._attrs_getter = attrs_getter
         self._attr_native_unit_of_measurement = unit
+        self._attr_state_class = state_class
         if device_class:
             self._attr_device_class = device_class
 
@@ -495,6 +501,7 @@ def build_heatpump_virtual_entities(
             "RequestingCount",
             "Heating circuits requesting",
             lambda s: float(len(s.requesting_circuits)),
+            unit="circuits",
         ),
         HeatpumpTextSensor(
             coordinator,
@@ -561,6 +568,7 @@ def build_heatpump_virtual_entities(
                 f"Cop{period.title()}",
                 f"COP {label}",
                 lambda s, p=period: s.cop(p),
+                unit="",
                 attrs_getter=lambda s, p=period: (
                     {
                         "produced_kwh": s.produced_today,
