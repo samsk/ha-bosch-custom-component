@@ -12,6 +12,7 @@ from ..const import CIRCUITS, DOMAIN, BOSCH_GATEWAY_ENTRY, UUID
 from .bosch import BoschSensor
 from .circuit import CircuitSensor
 from .energy import EcusRecordingSensors, EnergySensor, EnergySensors
+from .hc_curve import build_hc_curve_entities
 from .heatpump_virtual import (
     HeatpumpBinarySensor,
     get_heatpump_virtual_entities,
@@ -141,6 +142,13 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
                         is_enabled=sensor.attr_id in enabled_sensors,
                     )
                 )
+    # HC curve/supply diagnostics on each circuit device (disabled by default).
+    sensor_entities.extend(
+        build_hc_curve_entities(
+            coordinator=coordinator, gateway=gateway, uuid=uuid
+        )
+    )
+
     # Optional IVT heat-pump virtual diagnostics (each disabled by default).
     if should_register_heatpump_virtual(config_entry):
         virtual = get_heatpump_virtual_entities(

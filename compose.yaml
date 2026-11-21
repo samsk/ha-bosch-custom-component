@@ -1,0 +1,12 @@
+services:
+  unittests:
+    build: .
+    volumes:
+      - .:/app
+    command: ["python", "-m", "pytest", "--tb=short", "-q", "unittests"]
+
+  tests:
+    build: .
+    volumes:
+      - .:/app
+    command: ["python", "-m", "pytest", "--tb=short", "-q", "tests"]

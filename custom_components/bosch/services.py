@@ -22,6 +22,7 @@ from .const import (
     SERVICE_GET,
     VALUE,
 )
+from .statistics_repair import ALLOWED_RECORDING_SUM_IDS
 
 if TYPE_CHECKING:
     from .gateway import BoschGatewayEntry
@@ -55,6 +56,17 @@ SERVICE_BACKFILL_ENVIRONMENT_SCHEMA = SERVICE_INTEGRATION_SCHEMA.extend(
     {
         vol.Required("start_date"): cv.date,
         vol.Required("end_date"): cv.date,
+    }
+)
+SERVICE_REPAIR_RECORDING_SUMS = "repair_recording_sums"
+SERVICE_REPAIR_RECORDING_SUMS_SCHEMA = SERVICE_INTEGRATION_SCHEMA.extend(
+    {
+        vol.Required("start_date"): cv.date,
+        vol.Optional("statistic_ids"): vol.All(
+            cv.ensure_list,
+            [vol.In(sorted(ALLOWED_RECORDING_SUM_IDS))],
+        ),
+        vol.Optional("dry_run", default=True): cv.boolean,
     }
 )
 SERVICE_PUT_STRING_SCHEMA = SERVICE_GET_SCHEMA.extend({vol.Required(VALUE): str})
@@ -342,6 +354,34 @@ def async_register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
         SERVICE_BACKFILL_ENVIRONMENT_SCHEMA,
     )
 
+    async def async_handle_repair_recording_sums(
+        service_call: ServiceCall,
+    ) -> ServiceResponse:
+        """Manual-only: recompute recording cumulative sums (dry_run default)."""
+        from .statistics_repair import repair_recording_sums
+
+        # Resolve device so the call is scoped to a Bosch gateway entry.
+        _gateway_entries = find_gateway_entry(
+            hass=hass, devices_id=service_call.data[ATTR_DEVICE_ID]
+        )
+        if not _gateway_entries:
+            return {"error": "no_gateway"}
+        report = await repair_recording_sums(
+            hass,
+            start_date=service_call.data["start_date"],
+            statistic_ids=service_call.data.get("statistic_ids"),
+            dry_run=bool(service_call.data.get("dry_run", True)),
+        )
+        return report
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_REPAIR_RECORDING_SUMS,
+        async_handle_repair_recording_sums,
+        SERVICE_REPAIR_RECORDING_SUMS_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+
 
 def async_remove_services(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
     """Remove the services once the last gateway is unloaded.
@@ -362,6 +402,7 @@ def async_remove_services(hass: HomeAssistant, config_entry: ConfigEntry) -> Non
         "repair_energy_statistics",
         "clear_energy_statistics",
         SERVICE_BACKFILL_ENVIRONMENT,
+        SERVICE_REPAIR_RECORDING_SUMS,
     ):
         if hass.services.has_service(DOMAIN, service):
             hass.services.async_remove(DOMAIN, service)

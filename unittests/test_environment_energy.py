@@ -46,3 +46,23 @@ def test_environment_backfill_tail_sums() -> None:
     assert rows[0] == (100.0, 5.0, 15.0)
     assert abs(rows[1][2] - 18.1) < 1e-9
     assert rows[2] == (300.0, 0.0, 18.1)
+
+
+def test_environment_tail_after_gap_keeps_sum() -> None:
+    """Gap before rebuild start uses resolve_anchor, not a zero reset."""
+    # Prior env hour outside a short lookback; last known sum is 97.2.
+    env_states = {200.0: 5.0, 300.0: 7.0}
+    anchor = rm.resolve_anchor({}, 200.0, last_sum=97.2)
+    rows = rm.recompute_hourly_tail(env_states, from_ts=200.0, anchor_sum=anchor)
+    assert rows[0] == (200.0, 5.0, 102.2)
+    assert rows[1] == (300.0, 7.0, 109.2)
+
+
+def test_environment_invariant_per_hour() -> None:
+    """compressor + environment equals produced; missing compressor counts as 0."""
+    samples = [(7.0, 2.0), (4.1, 1.0), (5.0, None), (3.0, 3.0)]
+    for produced, compressor in samples:
+        env = rm.environment_kwh(produced, compressor)
+        assert env is not None and env >= 0.0
+        assert abs((compressor or 0.0) + env - produced) < 1e-9
+    assert rm.environment_kwh(None, 2.0) is None

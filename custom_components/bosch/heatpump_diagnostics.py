@@ -24,6 +24,10 @@ class CircuitSnapshot:
     supply_setpoint: float | None = None
     supply_actual: float | None = None
     room_temperature: float | None = None
+    design_temp: float | None = None
+    heat_curve_max: float | None = None
+    room_influence: float | None = None
+    room_temp_offset: float | None = None
 
     def matches_appliance_supply(self, appliance_supply: float | None) -> bool:
         """True when this circuit is receiving the appliance supply.
@@ -454,6 +458,16 @@ def build_snapshot_from_path_map(
                     _path_value(index, f"{prefix}/actualSupplyTemperature")
                 ),
                 room_temperature=room,
+                design_temp=_as_float(_path_value(index, f"{prefix}/designTemp")),
+                heat_curve_max=_as_float(
+                    _path_value(index, f"{prefix}/heatCurveMax")
+                ),
+                room_influence=_as_float(
+                    _path_value(index, f"{prefix}/roomInfluence")
+                ),
+                room_temp_offset=_as_float(
+                    _path_value(index, f"{prefix}/roomTempOffset")
+                ),
             )
         )
 
@@ -599,6 +613,10 @@ _SOURCE_MARKERS = (
     "poolTemperature",
     "poolSetpointTemperature",
     "energyMonitoring",
+    "designTemp",
+    "heatCurveMax",
+    "roomInfluence",
+    "roomTempOffset",
 )
 
 
@@ -1033,25 +1051,38 @@ def _iter_gateway_objects(gateway: Any) -> list[Any]:
     return objs
 
 
+def circuit_id_of(circuit: Any) -> str | None:
+    """Normalize a heating circuit object to hcN."""
+    raw = (
+        getattr(circuit, "id", None)
+        or getattr(circuit, "attr_id", None)
+        or getattr(circuit, "name", None)
+    )
+    if not raw:
+        return None
+    cid = str(raw).rstrip("/").split("/")[-1]
+    return cid or None
+
+
+def heating_circuit_objects(gateway: Any) -> list[Any]:
+    """Heating circuit objects for curve/supply polling."""
+    getter = getattr(gateway, "get_circuits", None)
+    if not getter:
+        return []
+    try:
+        circuits = getter("hc") or []
+    except Exception:  # noqa: BLE001
+        return []
+    return [c for c in circuits if c is not None]
+
+
 def heating_circuit_ids(gateway: Any, snapshot: HeatpumpSnapshot | None = None) -> list[str]:
     """Heating circuit ids from the gateway, then from a snapshot."""
     ids: list[str] = []
-    getter = getattr(gateway, "get_circuits", None)
-    if getter:
-        try:
-            for circuit in getter("hc") or []:
-                raw = (
-                    getattr(circuit, "id", None)
-                    or getattr(circuit, "attr_id", None)
-                    or getattr(circuit, "name", None)
-                )
-                if not raw:
-                    continue
-                cid = str(raw).rstrip("/").split("/")[-1]
-                if cid and cid not in ids:
-                    ids.append(cid)
-        except Exception:  # noqa: BLE001
-            pass
+    for circuit in heating_circuit_objects(gateway):
+        cid = circuit_id_of(circuit)
+        if cid and cid not in ids:
+            ids.append(cid)
     if snapshot:
         for circuit in snapshot.circuits:
             if circuit.circuit_id not in ids:

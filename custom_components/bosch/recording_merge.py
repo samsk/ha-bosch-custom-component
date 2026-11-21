@@ -62,6 +62,24 @@ def anchor_sum_before(
     return float(existing_sums[max(prior)])
 
 
+def resolve_anchor(
+    existing_sums: dict[float, float],
+    change_ts: float,
+    last_sum: float | None = None,
+) -> float:
+    """Cumulative sum just before ``change_ts`` across omitted zero hours.
+
+    Use the latest existing row before ``change_ts``. Else use ``last_sum``
+    (caller must pass a row older than ``change_ts``), or 0.0.
+    """
+    prior = [ts for ts in existing_sums if ts < change_ts]
+    if prior:
+        return float(existing_sums[max(prior)])
+    if last_sum is not None:
+        return float(last_sum)
+    return 0.0
+
+
 def merge_hour_states(
     existing_states: dict[float, float],
     incoming_states: dict[float, float],
@@ -92,3 +110,32 @@ def rows_to_maps(
         except (TypeError, ValueError):
             sums[ts] = 0.0
     return states, sums
+
+
+def plan_recording_sum_repair(
+    rows: list[dict[str, Any]],
+    *,
+    start_ts: float,
+    last_sum: float | None = None,
+) -> tuple[float, list[tuple[float, float, float]], int]:
+    """Plan a sum repair: (anchor, rebuilt rows, negative-change count).
+
+    Keeps every ``state`` unchanged. ``start_ts`` is the first hour to rewrite.
+    ``last_sum`` is used when ``rows`` has no hour strictly before ``start_ts``.
+    """
+    states, sums = rows_to_maps(rows)
+    negatives = 0
+    ordered = sorted(states)
+    prev_sum: float | None = None
+    for ts in ordered:
+        total = float(sums.get(ts, 0.0))
+        if prev_sum is not None and total < prev_sum - 1e-9:
+            negatives += 1
+        prev_sum = total
+    anchor = resolve_anchor(sums, start_ts, last_sum=last_sum)
+    from_ts = min((ts for ts in states if ts >= start_ts), default=None)
+    if from_ts is None:
+        return anchor, [], negatives
+    window = {ts: states[ts] for ts in states if ts >= start_ts}
+    rebuilt = recompute_hourly_tail(window, from_ts=from_ts, anchor_sum=anchor)
+    return anchor, rebuilt, negatives

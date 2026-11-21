@@ -389,11 +389,12 @@ class RecordingSensor(StatisticHelper):
         self, stats: list[Any] | None, now: datetime
     ) -> None:
         """Upsert hourly rows and recompute cumulative sums from the first change."""
+        from ..recorder_compat import async_sum_before
         from ..recording_merge import (
-            anchor_sum_before,
             first_changed_hour,
             merge_hour_states,
             recompute_hourly_tail,
+            resolve_anchor,
             rows_to_maps,
         )
 
@@ -421,6 +422,7 @@ class RecordingSensor(StatisticHelper):
         if not incoming:
             return
         first_ts = min(incoming)
+        # Bounded merge window for nearby hours; anchor is fetched separately.
         existing = await self.get_stats_from_ha_db(
             start_time=dt_util.utc_from_timestamp(first_ts) - timedelta(hours=1),
             end_time=now + timedelta(hours=1),
@@ -442,8 +444,15 @@ class RecordingSensor(StatisticHelper):
         change_ts = first_changed_hour(existing_states, trimmed)
         if change_ts is None:
             return
+        last_sum: float | None = None
+        if not any(ts < change_ts for ts in existing_sums):
+            last_sum = await async_sum_before(
+                self.hass,
+                self.statistic_id,
+                dt_util.utc_from_timestamp(change_ts),
+            )
         merged = merge_hour_states(existing_states, trimmed)
-        anchor = anchor_sum_before(existing_sums, change_ts)
+        anchor = resolve_anchor(existing_sums, change_ts, last_sum=last_sum)
         tail = recompute_hourly_tail(merged, from_ts=change_ts, anchor_sum=anchor)
         statistics_to_push = [
             StatisticData(

@@ -111,6 +111,42 @@ backfill_environment_energy:
       required: true
       selector:
         date:
+repair_recording_sums:
+  description: >-
+    Manual only. Recompute cumulative sums for IVT recording energy series
+    from start_date while keeping every hourly state. Defaults to dry_run
+    (no writes). A real run saves bosch_stats_backup_*.json under the HA
+    config directory first. Never runs automatically.
+  target:
+    device:
+      integration: bosch
+  fields:
+    start_date:
+      name: Start date
+      description: First local day to rewrite sums (required; e.g. 2026-11-13)
+      required: true
+      selector:
+        date:
+    dry_run:
+      name: Dry run
+      description: Log the plan only; write nothing (default true)
+      default: true
+      selector:
+        boolean:
+    statistic_ids:
+      name: Statistic IDs
+      description: >-
+        Optional subset of the four IVT energy series (consumed,
+        outputProduced, compressor, eheater). Unsupported ids are rejected.
+        After a real run, rebuild environment with backfill_environment_energy.
+      selector:
+        select:
+          multiple: true
+          options:
+            - recording:rconsumedenergyexternal
+            - recording:routputproducedexternal
+            - recording:rcompressorexternal
+            - recording:reheaterexternal
 set_dhw_charge:
   description: Charge DHW circuit.
   target:

@@ -16,7 +16,7 @@ from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from .recorder_compat import build_external_statistic_metadata
+from .recorder_compat import async_sum_before, build_external_statistic_metadata
 from .recording_merge import environment_kwh
 
 _LOGGER = logging.getLogger(__name__)
@@ -135,26 +135,15 @@ async def async_write_environment_range(
     """Recompute and write environment stats for [start, end). Returns hour count."""
     if end <= start:
         return 0
-    lookback_start = start - timedelta(hours=1)
     raw = await _async_stats(
         hass,
-        [PRODUCED_STAT_ID, COMPRESSOR_STAT_ID, ENVIRONMENT_STAT_ID],
-        lookback_start,
+        [PRODUCED_STAT_ID, COMPRESSOR_STAT_ID],
+        start,
         end,
     )
     produced_rows = raw.get(PRODUCED_STAT_ID, [])
     compressor_rows = raw.get(COMPRESSOR_STAT_ID, [])
-    env_rows = raw.get(ENVIRONMENT_STAT_ID, [])
-    anchor = 0.0
-    start_ts = dt_util.as_timestamp(start)
-    for row in env_rows:
-        ts = row.get("start")
-        if ts is None or float(ts) >= start_ts:
-            continue
-        try:
-            anchor = float(row.get("sum") or 0.0)
-        except (TypeError, ValueError):
-            anchor = 0.0
+    anchor = await async_sum_before(hass, ENVIRONMENT_STAT_ID, start) or 0.0
     stats = build_environment_statistics(
         produced_rows=produced_rows,
         compressor_rows=compressor_rows,

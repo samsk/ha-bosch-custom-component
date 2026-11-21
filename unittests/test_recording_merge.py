@@ -66,3 +66,30 @@ def test_merge_hour_states() -> None:
     """Incoming overrides existing keys."""
     merged = rm.merge_hour_states({1.0: 1.0, 2.0: 2.0}, {2.0: 9.0, 3.0: 3.0})
     assert merged == {1.0: 1.0, 2.0: 9.0, 3.0: 3.0}
+
+
+def test_resolve_anchor_after_omitted_zero_hour() -> None:
+    """Observed case: prior sum=19 outside window, state=1 → anchor 19 → sum 20."""
+    anchor = rm.resolve_anchor({}, 200.0, last_sum=19.0)
+    assert anchor == 19.0
+    tail = rm.recompute_hourly_tail({200.0: 1.0}, from_ts=200.0, anchor_sum=anchor)
+    assert tail == [(200.0, 1.0, 20.0)]
+
+
+def test_resolve_anchor_prefers_prior_in_window() -> None:
+    """Latest sum before change_ts wins over last_sum."""
+    sums = {100.0: 19.0, 200.0: 20.0}
+    assert rm.resolve_anchor(sums, 200.0, last_sum=0.0) == 19.0
+
+
+def test_resolve_anchor_ignores_row_at_change() -> None:
+    """A broken row at change_ts is never used as the anchor."""
+    sums = {200.0: 1.0, 300.0: 4.0}
+    assert rm.resolve_anchor(sums, 200.0, last_sum=19.0) == 19.0
+    assert rm.resolve_anchor(sums, 200.0, last_sum=None) == 0.0
+
+
+def test_resolve_anchor_empty_is_zero() -> None:
+    """No prior row and no last_sum → 0.0."""
+    assert rm.resolve_anchor({}, 100.0, last_sum=None) == 0.0
+    assert rm.resolve_anchor({}, 100.0, last_sum=7.5) == 7.5

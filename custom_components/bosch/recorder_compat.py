@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticMetaData
+from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 try:
     from homeassistant.components.recorder.statistics import StatisticMeanType
@@ -17,6 +19,10 @@ except ImportError:  # pragma: no cover - older HA
     StatisticMeanType = None
 
 _LOGGER = logging.getLogger(__name__)
+
+# Backward search for a strict-before cumulative sum across long gaps.
+_ANCHOR_WINDOW = timedelta(days=30)
+_ANCHOR_MAX_WINDOWS = 36
 
 _UNIT_CLASS_MAP = {
     "kWh": "energy",
@@ -83,6 +89,51 @@ def build_external_statistic_metadata(
     if _supports_has_mean():
         meta["has_mean"] = False
     return StatisticMetaData(**meta)
+
+
+async def async_sum_before(
+    hass: HomeAssistant,
+    statistic_id: str,
+    before: datetime,
+) -> float | None:
+    """Latest cumulative sum strictly before ``before``.
+
+    Searches backward in non-overlapping 30-day windows until a prior row
+    exists or history is exhausted. Never uses a row at or after ``before``.
+    """
+    before_ts = float(dt_util.as_timestamp(before))
+    end = before
+    for _ in range(_ANCHOR_MAX_WINDOWS):
+        start = end - _ANCHOR_WINDOW
+        raw = await get_instance(hass).async_add_executor_job(
+            statistics_during_period,
+            hass,
+            start,
+            end,
+            [statistic_id],
+            "hour",
+            None,
+            {"state", "sum"},
+        )
+        best_ts: float | None = None
+        best_sum: float | None = None
+        for row in raw.get(statistic_id) or []:
+            ts = row.get("start")
+            if ts is None:
+                continue
+            ts_f = float(ts)
+            if ts_f >= before_ts:
+                continue
+            if best_ts is None or ts_f > best_ts:
+                best_ts = ts_f
+                try:
+                    best_sum = float(row.get("sum") or 0.0)
+                except (TypeError, ValueError):
+                    best_sum = 0.0
+        if best_sum is not None:
+            return best_sum
+        end = start
+    return None
 
 
 async def async_clear_statistics_range(

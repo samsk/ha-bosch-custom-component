@@ -16,7 +16,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .environment_energy import MAX_BACKFILL_DAYS
-from .recorder_compat import build_external_statistic_metadata
+from .recorder_compat import async_sum_before, build_external_statistic_metadata
 from .recording_merge import degree_hours
 
 _LOGGER = logging.getLogger(__name__)
@@ -134,25 +134,14 @@ async def async_write_hdh_range(
     """Recompute and write HDH stats for [start, end). Returns hour count."""
     if end <= start:
         return 0
-    lookback_start = start - timedelta(hours=1)
     raw = await _async_stats(
         hass,
-        [OUTDOOR_STAT_ID, HDH_STAT_ID],
-        lookback_start,
+        [OUTDOOR_STAT_ID],
+        start,
         end,
     )
     outdoor_rows = raw.get(OUTDOOR_STAT_ID, [])
-    hdh_rows = raw.get(HDH_STAT_ID, [])
-    anchor = 0.0
-    start_ts = dt_util.as_timestamp(start)
-    for row in hdh_rows:
-        ts = row.get("start")
-        if ts is None or float(ts) >= start_ts:
-            continue
-        try:
-            anchor = float(row.get("sum") or 0.0)
-        except (TypeError, ValueError):
-            anchor = 0.0
+    anchor = await async_sum_before(hass, HDH_STAT_ID, start) or 0.0
     stats = build_hdh_statistics(
         outdoor_rows=outdoor_rows,
         anchor_sum=anchor,

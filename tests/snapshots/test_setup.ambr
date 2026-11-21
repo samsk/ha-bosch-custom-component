@@ -110,6 +110,67 @@
       'domain': 'sensor',
       'state': '11.6',
     }),
+    'HcCurveDesignTemphc1-1': dict({
+      'attributes': dict({
+        'device_class': 'temperature',
+        'state_class': 'measurement',
+        'unit_of_measurement': '°C',
+      }),
+      'domain': 'sensor',
+      'state': 'unknown',
+    }),
+    'HcCurveHeatCurveMaxhc1-1': dict({
+      'attributes': dict({
+        'device_class': 'temperature',
+        'state_class': 'measurement',
+        'unit_of_measurement': '°C',
+      }),
+      'domain': 'sensor',
+      'state': 'unknown',
+    }),
+    'HcCurvePumpModulationhc1-1': dict({
+      'attributes': dict({
+        'state_class': 'measurement',
+        'unit_of_measurement': '%',
+      }),
+      'domain': 'sensor',
+      'state': 'unknown',
+    }),
+    'HcCurveRoomInfluencehc1-1': dict({
+      'attributes': dict({
+        'state_class': 'measurement',
+        'unit_of_measurement': '%',
+      }),
+      'domain': 'sensor',
+      'state': 'unknown',
+    }),
+    'HcCurveRoomTempOffsethc1-1': dict({
+      'attributes': dict({
+        'device_class': 'temperature',
+        'state_class': 'measurement',
+        'unit_of_measurement': '°C',
+      }),
+      'domain': 'sensor',
+      'state': 'unknown',
+    }),
+    'HcCurveSupplyActualhc1-1': dict({
+      'attributes': dict({
+        'device_class': 'temperature',
+        'state_class': 'measurement',
+        'unit_of_measurement': '°C',
+      }),
+      'domain': 'sensor',
+      'state': 'unknown',
+    }),
+    'HcCurveSupplySetpointhc1-1': dict({
+      'attributes': dict({
+        'device_class': 'temperature',
+        'state_class': 'measurement',
+        'unit_of_measurement': '°C',
+      }),
+      'domain': 'sensor',
+      'state': '60.0',
+    }),
     'SensorsActual heating pump modulation-1': dict({
       'attributes': dict({
         'maxValue': 100.0,

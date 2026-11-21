@@ -126,6 +126,28 @@ data:
 
 IVT recordings: `bosch.fetch_recordings_sensor_range` with the recording `statistic_id` and a date.
 
+If energy dashboard daily totals jump down after a gap (omitted zero-kWh hours), the hourly `state` values are usually still correct and only the cumulative `sum` needs a rewrite. Manual repair (dry-run first; never automatic):
+
+```yaml
+service: bosch.repair_recording_sums
+target:
+  device_id: <your bosch gateway device id>
+data:
+  start_date: "2026-11-13"
+  dry_run: true
+```
+
+Set `dry_run: false` only after reviewing the response. Then rebuild environment:
+
+```yaml
+service: bosch.backfill_environment_energy
+target:
+  device_id: <your bosch gateway device id>
+data:
+  start_date: "2026-11-13"
+  end_date: "2026-11-21"
+```
+
 ## Heating circuit curve sensors (HC)
 
 Per-circuit supply / curve diagnostics on each HC climate device (disabled by default; no Configure option). Intended so HA history can feed AI / manual tuning of the heating cycle and curve. Only paths the heat pump exports are filled — KM200 often does not export curve settings. Full reference: [docs/hc-curve-sensors.md](docs/hc-curve-sensors.md).

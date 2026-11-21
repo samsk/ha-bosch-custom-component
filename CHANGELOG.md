@@ -11,6 +11,7 @@ Changes in this fork since [bosch-thermostat/home-assistant-bosch-custom-compone
 - Pool climate when the gateway exposes pool paths.
 - Derived `recording:renvironmentexternal` and HDH `recording:rheatingdegreehoursexternal`. See [docs/heating-degree-hours.md](docs/heating-degree-hours.md).
 - `bosch.backfill_environment_energy`, `bosch.repair_energy_statistics`, `bosch.clear_energy_statistics`.
+- Manual service `bosch.repair_recording_sums` (dry-run by default) to recompute cumulative sums for IVT energy recordings while keeping hourly states. Writes a config-dir backup before any real run. Never runs automatically; after a real run, use `bosch.backfill_environment_energy` for environment.
 - Configure: show last-hour recording values; energy stats repair days.
 - Fetch recordings by date range.
 
@@ -20,6 +21,7 @@ Changes in this fork since [bosch-thermostat/home-assistant-bosch-custom-compone
 
 ### Fixed
 
+- Recording LTS **upsert**: when zero-energy hours are omitted, the cumulative `sum` no longer resets after a gap. The upsert uses the latest in-window row strictly before the change, otherwise a gap-safe recorder lookup that walks history backward. The same anchor logic applies to derived `renvironment` and HDH hourly tails and to `bosch.repair_recording_sums`.
 - Recording LTS **upsert**: supports late or corrected hourly values by rewriting changed rows and recomputing cumulative `sum` from the first change. This avoids permanently retaining an incorrect first sample.
 - Energy `0` kWh hours stay omitted until Bosch revises them; temperature recordings **keep real 0 °C** hours (client used to drop them) via day re-fetch / `recording_temp_fill`.
 - Recording entities set `last_reset` only when `state_class` is `total` (HA rejects it otherwise, e.g. temperature recordings); temperature recording fetches log and skip bad payloads instead of failing the hourly update.

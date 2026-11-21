@@ -30,6 +30,12 @@ from ..recorder_compat import build_external_statistic_metadata
 from .base import BoschBaseSensor
 
 _LOGGER = logging.getLogger(__name__)
+_IMPORT_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def import_lock_for(statistic_id: str) -> asyncio.Lock:
+    """Shared write lock per statistic id."""
+    return _IMPORT_LOCKS.setdefault(statistic_id, asyncio.Lock())
 
 
 class StatisticHelper(BoschBaseSensor):
@@ -51,7 +57,6 @@ class StatisticHelper(BoschBaseSensor):
         """Initialize statistic helper."""
         self._short_id: str | None = None
         self._new_stats_api = new_stats_api
-        self._statistic_import_lock = asyncio.Lock()
         self._unit_of_measurement: str | None = None
         super().__init__(
             coordinator=coordinator,
@@ -105,6 +110,11 @@ class StatisticHelper(BoschBaseSensor):
     def statistic_id(self) -> str:
         """External API statistic ID."""
         raise NotImplementedError()
+
+    @property
+    def _statistic_import_lock(self) -> asyncio.Lock:
+        """Import lock shared with the manual repair."""
+        return import_lock_for(self.statistic_id)
 
     @property
     def native_unit_of_measurement(self) -> str | None:
