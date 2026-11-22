@@ -8,6 +8,11 @@ filterwarnings = [
     "ignore::PendingDeprecationWarning:homeassistant.*",
 ]
 
+[tool.ruff]
+# Submodule tools/ is not checked out in CI; exclude so local `ruff check .`
+# matches GitHub Actions.
+exclude = ["tools"]
+
 [tool.ruff.lint]
 # Pinned rule set. CI installs ruff unpinned, and ruff has widened its defaults
 # before (0.16), which fails lint on files nobody has touched. Pinning keeps a

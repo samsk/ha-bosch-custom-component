@@ -75,7 +75,9 @@ def cached_snapshot(
     """One snapshot per refresh generation, shared by all virtual entities."""
 
     def _build() -> HeatpumpSnapshot:
-        snap = build_snapshot_from_gateway(gateway)
+        snap = build_snapshot_from_gateway(
+            gateway, energy_hours=getattr(coordinator, "energy_hours", None)
+        )
         return apply_period_totals(snap, period_totals(coordinator))
 
     return get_or_build_snapshot(
@@ -649,21 +651,42 @@ def build_heatpump_virtual_entities(
             },
         )
     )
-    for period, label in (("month", "month"), ("year", "year")):
+    for period, label, key in (
+        ("today", "today", "SpfToday"),
+        ("last_24h", "last 24h", "SpfLast24h"),
+        ("month", "month", "SpfMonth"),
+        ("year", "year", "SpfYear"),
+    ):
         entities.append(
             HeatpumpNumericSensor(
                 coordinator,
                 gateway,
                 uuid,
-                f"Spf{period.title()}",
+                key,
                 f"SPF {label}",
                 lambda s, p=period: s.spf(p),
                 unit=COP_UNIT,
                 attrs_getter=lambda s, p=period: {
-                    "produced_kwh": getattr(s, f"produced_{p}"),
-                    "eheater_kwh": getattr(s, f"eheater_{p}"),
-                    "consumed_kwh": getattr(s, f"consumed_{p}"),
-                    "source": s.period_source.get(p),
+                    "produced_kwh": (
+                        s.produced_last_24h
+                        if p == "last_24h"
+                        else getattr(s, f"produced_{p}")
+                    ),
+                    "eheater_kwh": (
+                        s.eheater_last_24h
+                        if p == "last_24h"
+                        else getattr(s, f"eheater_{p}")
+                    ),
+                    "consumed_kwh": (
+                        s.consumed_last_24h
+                        if p == "last_24h"
+                        else getattr(s, f"consumed_{p}")
+                    ),
+                    "source": (
+                        "list"
+                        if p in ("today", "last_24h")
+                        else s.period_source.get(p)
+                    ),
                 },
             )
         )

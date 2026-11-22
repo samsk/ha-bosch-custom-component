@@ -7,9 +7,9 @@ Changes in this fork since [bosch-thermostat/home-assistant-bosch-custom-compone
 ### Added
 
 - Virtual heat-pump diagnostics (HTTP, experimental, disabled by default). See [docs/virtual-heatpump-sensors.md](docs/virtual-heatpump-sensors.md).
-- SPF month / year sensors: `(produced + eheater) / consumed` from gateway totals or HA stored statistics.
+- SPF today / last 24h / month / year sensors: `(produced + eheater) / consumed` (lists or HA stored statistics).
 - HC curve/supply sensors on each heating-circuit device (disabled by default; only paths the heat pump exports). See [docs/hc-curve-sensors.md](docs/hc-curve-sensors.md).
-- Pool climate and **Pool heating** switch when the gateway exposes pool paths.
+- Pool climate and Pool **Heating** switch (`switch.pool_heating`) when the gateway exposes pool paths.
 - Derived `recording:renvironmentexternal` and HDH `recording:rheatingdegreehoursexternal`. See [docs/heating-degree-hours.md](docs/heating-degree-hours.md).
 - `bosch.backfill_environment_energy`, `bosch.repair_energy_statistics`, `bosch.clear_energy_statistics`.
 - Manual service `bosch.repair_recording_sums` (dry-run by default) to recompute cumulative sums for IVT energy recordings while keeping hourly states. Writes a config-dir backup before any real run. Never runs automatically; after a real run, use `bosch.backfill_environment_energy` for environment.
@@ -23,7 +23,7 @@ Changes in this fork since [bosch-thermostat/home-assistant-bosch-custom-compone
 ### Fixed
 
 - Pool climate writes use gateway `allowedValues` and raise on failure (no silent `raw_put` swallow).
-- COP last 24h fetches yesterday’s energyMonitoring rows so the window survives midnight/restart.
+- COP / SPF today and last 24h: merged yesterday+today hour rows live in a coordinator store (library `RecordingSensor.state` is read-only, so assigning merged state never worked). Hourly pull order is yesterday → today → LTS push so today’s rows keep flowing into stored statistics.
 - COP month / year use produced / compressor (same as today); month/year totals fall back to HA stored statistics when the gateway has no period scalars.
 - Recording LTS **upsert**: when zero-energy hours are omitted, the cumulative `sum` no longer resets after a gap. The upsert uses the latest in-window row strictly before the change, otherwise a gap-safe recorder lookup that walks history backward. The same anchor logic applies to derived `renvironment` and HDH hourly tails and to `bosch.repair_recording_sums`.
 - Recording LTS **upsert**: supports late or corrected hourly values by rewriting changed rows and recomputing cumulative `sum` from the first change. This avoids permanently retaining an incorrect first sample.

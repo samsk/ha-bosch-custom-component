@@ -34,7 +34,8 @@ Heating-circuit curve / supply sensors are **not** in this set. They live on eac
 | [Operation](#operation) | [Mode](#heat-pump-mode) · [Compressor active](#compressor-active) · [Delta](#heat-source-delta) |
 | [Who is asking](#who-is-asking-for-heat) | [Requestors](#heat-requestors) · [Primary circuit](#primary-heating-circuit) · [Space heating](#space-heating-active) · [Count](#heating-circuits-requesting) · [hcN](#hcn-requesting-heat) |
 | | [DHW requested](#dhw-requested) · [DHW charging](#dhw-charging) · [DHW gap](#dhw-temperature-gap) · [Pool requested](#pool-requested) · [Pool gap](#pool-temperature-gap) |
-| [Efficiency](#efficiency) | [COP today](#cop-today) · [COP 24h](#cop-last-24h) · [COP month/year](#cop-month--year) · [SPF month/year](#spf-month--year) |
+| [Efficiency](#efficiency) | [COP today](#cop-today) · [COP 24h](#cop-last-24h) · [COP month/year](#cop-month--year) |
+| | [SPF today](#spf-today) · [SPF 24h](#spf-last-24h) · [SPF month/year](#spf-month--year) |
 | | [Backup share](#backup-heater-share-today--month--year) · [Backup used](#backup-heater-used-today) · [Hint](#heat-pump-efficiency-hint) |
 | [Last hour](#last-hour) | [Electricity](#last-hour-electricity) · [Heat](#last-hour-heat) · [Backup](#last-hour-backup-heater) |
 | [Compressor split](#compressor-time-split) | [Minutes](#compressor-minutes-today) · [Share](#compressor-share-today) |
@@ -141,7 +142,7 @@ Pool setpoint minus pool temperature (°C).
 
 | Period | Inputs | Source |
 | --- | --- | --- |
-| Today / last 24h | Hourly `energyMonitoring` lists | Gateway hourly pull (~`:06`); current incomplete hour excluded. Yesterday rows are fetched so 24h survives midnight/restart. |
+| Today / last 24h | Hourly `energyMonitoring` lists | Gateway hourly pull (~`:06`); current incomplete hour excluded. Yesterday + today are merged in a coordinator store (library `state` is read-only). |
 | Month / year | Period totals | Gateway `*_ThisMonth_kWh` / `*_ThisYear_kWh` when present; otherwise HA stored statistics (`sum` now − `sum` at period start). Compressor month/year **always** from statistics (gateway has no series). |
 
 **Caveats**
@@ -150,24 +151,69 @@ Pool setpoint minus pool temperature (°C).
 - Hours with zero output are often omitted by the gateway; they count as 0 and do not change totals.
 - Month/year values are only as complete as stored statistics after a fresh install.
 - **No SCOP sensor.** SCOP is a rated lab value (EN 14825), not measurable from field data. Compare SPF year to the heat-pump datasheet SCOP.
+- All COP / SPF entities are **disabled by default**; enable them on the Heat pump diagnostics device.
 
 After reload, wait for the next `:06` before expecting numbers. Chart history is only the hours the entity was numeric; see [When values appear](#when-values-appear) for the null-unit statistic cleanup.
 
 ### COP today
 
-Heat-pump COP for the **local calendar day**. Attributes: `produced_kwh`, `compressor_kwh`, `source`.
+| | |
+| --- | --- |
+| Entity | `sensor.heat_pump_diagnostics_cop_today` |
+| Formula | `produced / compressor` |
+| Unit | `""` (dimensionless) |
+| Refresh | Hourly (~`:06`) |
+| Attributes | `produced_kwh`, `compressor_kwh`, `source` (`list`) |
 
 ### COP last 24h
 
-Same ratio over the previous **24 settled hours** (rolling window). Attributes: `produced_kwh`, `compressor_kwh`.
+| | |
+| --- | --- |
+| Entity | `sensor.heat_pump_diagnostics_cop_last_24h` |
+| Formula | `produced / compressor` over 24 settled hours |
+| Unit | `""` |
+| Refresh | Hourly (~`:06`) |
+| Attributes | `produced_kwh`, `compressor_kwh` |
 
 ### COP month / year
 
-Same heat-pump COP for the local calendar month / year. Attributes: `produced_kwh`, `compressor_kwh`, `source` (`gateway` or `statistics`).
+| | |
+| --- | --- |
+| Entities | `sensor.heat_pump_diagnostics_cop_month`, `…_cop_year` |
+| Formula | `produced / compressor` |
+| Unit | `""` |
+| Refresh | Hourly (statistics / gateway scalars) |
+| Attributes | `produced_kwh`, `compressor_kwh`, `source` (`gateway` or `statistics`) |
+
+### SPF today
+
+| | |
+| --- | --- |
+| Entity | `sensor.heat_pump_diagnostics_spf_today` |
+| Formula | `(produced + eheater) / consumed` |
+| Unit | `""` |
+| Refresh | Hourly (~`:06`) |
+| Attributes | `produced_kwh`, `eheater_kwh`, `consumed_kwh`, `source` |
+
+### SPF last 24h
+
+| | |
+| --- | --- |
+| Entity | `sensor.heat_pump_diagnostics_spf_last_24h` |
+| Formula | `(produced + eheater) / consumed` over 24 settled hours |
+| Unit | `""` |
+| Refresh | Hourly (~`:06`) |
+| Attributes | `produced_kwh`, `eheater_kwh`, `consumed_kwh`, `source` |
 
 ### SPF month / year
 
-System SPF for the local calendar month / year. Attributes: `produced_kwh`, `eheater_kwh`, `consumed_kwh`, `source`.
+| | |
+| --- | --- |
+| Entities | `sensor.heat_pump_diagnostics_spf_month`, `…_spf_year` |
+| Formula | `(produced + eheater) / consumed` |
+| Unit | `""` |
+| Refresh | Hourly (statistics / gateway scalars) |
+| Attributes | `produced_kwh`, `eheater_kwh`, `consumed_kwh`, `source` (`gateway` or `statistics`) |
 
 ### Backup heater share today / month / year
 

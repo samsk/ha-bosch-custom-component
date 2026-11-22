@@ -155,7 +155,7 @@ class BoschPoolHeatingSwitch(CoordinatorEntity, SwitchEntity):
     """One-tap pool heating on/off, shared with pool climate."""
 
     _attr_has_entity_name = True
-    _attr_name = "Pool heating"
+    _attr_name = "Heating"
     _attr_entity_registry_enabled_default = True
 
     def __init__(

@@ -67,6 +67,8 @@ class BoschDataUpdateCoordinator(TimestampDataUpdateCoordinator):
         self._object_refs: dict[int, int] = {}
         self._recording_entities: list[RecordingEntity] = []
         self._recording_unsub: CALLBACK_TYPE | None = None
+        # Merged energyMonitoring hour rows (library state is read-only).
+        self.energy_hours: dict[str, list[Any]] = {}
 
         # Requests are serialised by the library connectors' own lock, so the
         # updates below run concurrently without extra throttling here.
@@ -146,6 +148,35 @@ class BoschDataUpdateCoordinator(TimestampDataUpdateCoordinator):
         _LOGGER.debug("Bosch update completed successfully")
         return True
 
+    def _merge_energy_hours(self, obj: BoschObject) -> None:
+        """Merge obj.state into energy_hours (library state has no setter)."""
+        from .heatpump_diagnostics import (
+            _recording_hour_rows,
+            merge_energy_monitoring_hours,
+        )
+
+        key = _energy_hours_key(obj)
+        if not key:
+            return
+        current_rows = _recording_hour_rows(getattr(obj, "state", None))
+        stored = self.energy_hours.get(key)
+        if stored is None:
+            if current_rows is not None and _recording_has_numeric_hours(current_rows):
+                self.energy_hours[key] = list(current_rows)
+            return
+        if not _recording_has_numeric_hours(current_rows):
+            _LOGGER.debug(
+                "Keeping stored numeric hours for %s after empty recording pull",
+                getattr(obj, "name", key),
+            )
+            return
+        merged = merge_energy_monitoring_hours(
+            stored, current_rows, now=dt_util.now()
+        )
+        rows = _recording_hour_rows(merged)
+        if rows is not None:
+            self.energy_hours[key] = list(rows)
+
     async def _async_update_object(self, obj: BoschObject, **kwargs: Any) -> object:
         """Update a single Bosch object.
 
@@ -153,7 +184,6 @@ class BoschDataUpdateCoordinator(TimestampDataUpdateCoordinator):
         otherwise whether the update succeeded.
         """
         keep_hours = _is_energy_monitoring(obj)
-        previous_state = getattr(obj, "state", None) if keep_hours else None
         try:
             _LOGGER.debug("Updating Bosch object: %s", obj.name)
             await obj.update(**kwargs)
@@ -168,28 +198,8 @@ class BoschDataUpdateCoordinator(TimestampDataUpdateCoordinator):
         except Exception as err:
             _LOGGER.warning("Unexpected error updating %s: %s", obj.name, err)
             return False
-        if keep_hours and previous_state is not None:
-            current_state = getattr(obj, "state", None)
-            if (
-                _recording_has_numeric_hours(previous_state)
-                and not _recording_has_numeric_hours(current_state)
-            ):
-                _LOGGER.debug(
-                    "Keeping previous numeric hours for %s after empty recording pull",
-                    obj.name,
-                )
-                merged = previous_state
-            else:
-                from .heatpump_diagnostics import merge_energy_monitoring_hours
-
-                merged = merge_energy_monitoring_hours(
-                    previous_state, current_state, now=dt_util.now()
-                )
-            if merged is not current_state:
-                try:
-                    obj.state = merged
-                except Exception:  # noqa: BLE001
-                    _LOGGER.debug("Could not restore/merge state on %s", obj.name)
+        if keep_hours:
+            self._merge_energy_hours(obj)
         return True
 
     async def _async_push_recording_entity(self, entity: RecordingEntity) -> None:
@@ -221,22 +231,28 @@ class BoschDataUpdateCoordinator(TimestampDataUpdateCoordinator):
                     id(entity.bosch_object): entity.bosch_object
                     for entity in entities
                 }
-                # Recording/energy sensors fetch the data of the given (local)
-                # time; the library's own default must not be relied on.
-                async with asyncio.TaskGroup() as tg:
-                    for obj in objects.values():
-                        tg.create_task(self._async_update_object(obj, time=now))
-                # Yesterday rows keep rolling 24h COP after midnight/restart.
-                yesterday = now - timedelta(days=1)
                 energy_objs = [
                     obj for obj in objects.values() if _is_energy_monitoring(obj)
                 ]
+                other_objs = [
+                    obj for obj in objects.values() if not _is_energy_monitoring(obj)
+                ]
+                # Yesterday first so the store merges both days; today last so
+                # the library object (and LTS push) hold today's rows.
+                yesterday = now - timedelta(days=1)
                 if energy_objs:
                     async with asyncio.TaskGroup() as tg:
                         for obj in energy_objs:
                             tg.create_task(
                                 self._async_update_object(obj, time=yesterday)
                             )
+                    async with asyncio.TaskGroup() as tg:
+                        for obj in energy_objs:
+                            tg.create_task(self._async_update_object(obj, time=now))
+                if other_objs:
+                    async with asyncio.TaskGroup() as tg:
+                        for obj in other_objs:
+                            tg.create_task(self._async_update_object(obj, time=now))
                 async with asyncio.TaskGroup() as tg:
                     for entity in entities:
                         tg.create_task(self._async_push_recording_entity(entity))
@@ -273,6 +289,11 @@ class BoschDataUpdateCoordinator(TimestampDataUpdateCoordinator):
             self.hass, self.async_recording_sensors_update, nexti
         )
         _LOGGER.debug("Next update of 1-hour sensors scheduled at: %s", nexti)
+
+
+def _energy_hours_key(obj: BoschObject) -> str:
+    """Store key for energyMonitoring hour rows."""
+    return str(getattr(obj, "attr_id", None) or getattr(obj, "path", None) or "")
 
 
 def _is_energy_monitoring(obj: BoschObject) -> bool:

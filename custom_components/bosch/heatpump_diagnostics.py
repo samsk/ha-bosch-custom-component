@@ -97,6 +97,8 @@ class HeatpumpSnapshot:
     compressor_year: float | None = None
     produced_last_24h: float | None = None
     compressor_last_24h: float | None = None
+    consumed_last_24h: float | None = None
+    eheater_last_24h: float | None = None
     last_hour_electricity: float | None = None
     last_hour_heat: float | None = None
     last_hour_eheater: float | None = None
@@ -261,11 +263,17 @@ class HeatpumpSnapshot:
         return self._ratio(produced, compressor)
 
     def spf(self, period: str) -> float | None:
-        """System SPF for month/year.
+        """System SPF for today/last_24h/month/year.
 
         (produced + eheater) / consumed. Backup heater included on both sides.
         """
         mapping = {
+            "today": (self.produced_today, self.eheater_today, self.consumed_today),
+            "last_24h": (
+                self.produced_last_24h,
+                self.eheater_last_24h,
+                self.consumed_last_24h,
+            ),
             "month": (self.produced_month, self.eheater_month, self.consumed_month),
             "year": (self.produced_year, self.eheater_year, self.consumed_year),
         }
@@ -602,6 +610,18 @@ def build_snapshot_from_path_map(
             _path_value(
                 index,
                 "recordings/heatSources/total/energyMonitoring/compressor_Last24h_kWh",
+            )
+        ),
+        consumed_last_24h=_as_float(
+            _path_value(
+                index,
+                "recordings/heatSources/total/energyMonitoring/consumedEnergy_Last24h_kWh",
+            )
+        ),
+        eheater_last_24h=_as_float(
+            _path_value(
+                index,
+                "recordings/heatSources/total/energyMonitoring/eheater_Last24h_kWh",
             )
         ),
         last_hour_electricity=_recording_hour(index, "consumedEnergy"),
@@ -1105,9 +1125,37 @@ def heating_circuit_ids(gateway: Any, snapshot: HeatpumpSnapshot | None = None) 
     return ids
 
 
-def build_snapshot_from_gateway(gateway: Any) -> HeatpumpSnapshot:
+def _overlay_energy_hours(
+    path_values: dict[str, Any],
+    energy_hours: dict[str, list[Any]],
+) -> dict[str, Any]:
+    """Replace energyMonitoring hour lists with coordinator-merged rows."""
+    if not energy_hours:
+        return path_values
+    out = dict(path_values)
+    by_norm = {p.lstrip("/"): p for p in out}
+    for key, rows in energy_hours.items():
+        if not rows:
+            continue
+        norm = str(key).lstrip("/")
+        existing = by_norm.get(norm)
+        if existing is not None:
+            out[existing] = rows
+        else:
+            out[key] = rows
+    return out
+
+
+def build_snapshot_from_gateway(
+    gateway: Any,
+    *,
+    energy_hours: dict[str, list[Any]] | None = None,
+    now: datetime | None = None,
+) -> HeatpumpSnapshot:
     """Collect path values from gateway sensors/circuits into a snapshot."""
     path_values: dict[str, Any] = {}
     for obj in _iter_gateway_objects(gateway):
         path_values.update(_obj_path_values(obj))
-    return build_snapshot_from_path_map(path_values)
+    if energy_hours:
+        path_values = _overlay_energy_hours(path_values, energy_hours)
+    return build_snapshot_from_path_map(path_values, now=now)

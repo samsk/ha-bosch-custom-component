@@ -10,3 +10,10 @@ services:
     volumes:
       - .:/app
     command: ["python", "-m", "pytest", "--tb=short", "-q", "tests"]
+
+  lint:
+    extends:
+      service: unittests
+    entrypoint: ["sh", "-c"]
+    command:
+      - "pip install -q ruff && ruff check ."
