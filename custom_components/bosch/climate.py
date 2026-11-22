@@ -15,6 +15,7 @@ from homeassistant.components.climate.const import (
 )
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -31,8 +32,9 @@ from .pool import (
     DEFAULT_TEMP_STEP,
     HVAC_HEAT as POOL_HEAT,
     HVAC_OFF as POOL_OFF,
-    PoolPoller,
+    PoolWriteError,
     async_pool_available,
+    get_or_create_pool_poller,
     hvac_to_status,
     status_to_hvac,
 )
@@ -246,7 +248,7 @@ class BoschPoolClimate(CoordinatorEntity, ClimateEntity):
         super().__init__(coordinator)
         self._uuid = uuid
         self._gateway = gateway
-        self._poller = PoolPoller(gateway)
+        self._poller = get_or_create_pool_poller(coordinator, gateway)
         self._optimistic_mode = optimistic_mode
         self._optimistic_hvac_mode: str | None = None
         self._optimistic_target_temperature: float | None = None
@@ -338,12 +340,12 @@ class BoschPoolClimate(CoordinatorEntity, ClimateEntity):
             self.async_write_ha_state()
         try:
             await self._poller.async_set_status(status)
-        except Exception:
+        except PoolWriteError as err:
             _LOGGER.exception("Failed to set pool status to %s", status)
             if self._optimistic_mode:
                 self._optimistic_hvac_mode = None
                 self.async_write_ha_state()
-            return
+            raise HomeAssistantError(f"Failed to set pool status: {err}") from err
         await self._async_refresh_after_set()
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
@@ -357,12 +359,14 @@ class BoschPoolClimate(CoordinatorEntity, ClimateEntity):
             self.async_write_ha_state()
         try:
             await self._poller.async_set_temperature(float(temperature))
-        except Exception:
+        except PoolWriteError as err:
             _LOGGER.exception("Failed to set pool temperature to %s", temperature)
             if self._optimistic_mode:
                 self._optimistic_target_temperature = None
                 self.async_write_ha_state()
-            return
+            raise HomeAssistantError(
+                f"Failed to set pool temperature: {err}"
+            ) from err
         await self._async_refresh_after_set()
 
     async def async_turn_on(self) -> None:

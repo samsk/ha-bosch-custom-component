@@ -38,6 +38,7 @@ from ..heatpump_diagnostics import (
     heating_circuit_ids,
     is_recording_source,
 )
+from ..heatpump_period import apply_period_totals, period_totals
 from ..heatpump_snapshot_cache import SNAPSHOT_ATTR, get_or_build_snapshot
 from ..heatpump_split import HeatpumpSplitAccumulator
 
@@ -72,9 +73,14 @@ def cached_snapshot(
     coordinator: BoschDataUpdateCoordinator, gateway: BoschGateway
 ) -> HeatpumpSnapshot:
     """One snapshot per refresh generation, shared by all virtual entities."""
+
+    def _build() -> HeatpumpSnapshot:
+        snap = build_snapshot_from_gateway(gateway)
+        return apply_period_totals(snap, period_totals(coordinator))
+
     return get_or_build_snapshot(
         coordinator,
-        lambda: build_snapshot_from_gateway(gateway),
+        _build,
         attr=_HP_SNAPSHOT_ATTR,
     )
 
@@ -606,17 +612,11 @@ def build_heatpump_virtual_entities(
                 f"COP {label}",
                 lambda s, p=period: s.cop(p),
                 unit=COP_UNIT,
-                attrs_getter=lambda s, p=period: (
-                    {
-                        "produced_kwh": s.produced_today,
-                        "compressor_kwh": s.compressor_today,
-                    }
-                    if p == "today"
-                    else {
-                        "produced_kwh": getattr(s, f"produced_{p}"),
-                        "consumed_kwh": getattr(s, f"consumed_{p}"),
-                    }
-                ),
+                attrs_getter=lambda s, p=period: {
+                    "produced_kwh": getattr(s, f"produced_{p}"),
+                    "compressor_kwh": getattr(s, f"compressor_{p}"),
+                    "source": s.period_source.get(p),
+                },
             )
         )
         entities.append(
@@ -649,6 +649,24 @@ def build_heatpump_virtual_entities(
             },
         )
     )
+    for period, label in (("month", "month"), ("year", "year")):
+        entities.append(
+            HeatpumpNumericSensor(
+                coordinator,
+                gateway,
+                uuid,
+                f"Spf{period.title()}",
+                f"SPF {label}",
+                lambda s, p=period: s.spf(p),
+                unit=COP_UNIT,
+                attrs_getter=lambda s, p=period: {
+                    "produced_kwh": getattr(s, f"produced_{p}"),
+                    "eheater_kwh": getattr(s, f"eheater_{p}"),
+                    "consumed_kwh": getattr(s, f"consumed_{p}"),
+                    "source": s.period_source.get(p),
+                },
+            )
+        )
 
     entities.append(
         HeatpumpBinarySensor(

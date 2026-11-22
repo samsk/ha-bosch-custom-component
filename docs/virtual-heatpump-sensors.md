@@ -21,7 +21,7 @@ Two refresh paths:
 | Live (60s coordinator) | mode, compressor, delta, requestors, circuit gaps | Next scan after enable / reload |
 | Hourly recording | COP, backup share, last-hour kWh, efficiency hint | Next `energyMonitoring` pull (~`:06`) |
 
-**COP is not computed from Home Assistant history or long-term statistics.** It reads live `energyMonitoring` values on the gateway objects. After a reload those objects are empty until the hourly pull runs, so COP / last-hour stay `Unknown` until then (up to about an hour). Once filled, they keep that object state until the next hourly refresh.
+**COP today / last 24h** read live `energyMonitoring` hourly lists. After a reload those objects are empty until the hourly pull runs, so they stay `Unknown` until then (up to about an hour). **COP / SPF month / year** also use HA stored statistics when the gateway has no period totals.
 
 The more-info chart uses recorder long-term statistics for the entity. It only has points for hours when the entity was numeric (no backfill). All COP sensors use unit `""`. If an older `sensor.heat_pump_diagnostics_cop_today` statistic was registered with unit `null`, new states will not attach — remove that statistic once under **Developer tools → Statistics**, then let HA recreate it from the live entity.
 
@@ -34,7 +34,7 @@ Heating-circuit curve / supply sensors are **not** in this set. They live on eac
 | [Operation](#operation) | [Mode](#heat-pump-mode) · [Compressor active](#compressor-active) · [Delta](#heat-source-delta) |
 | [Who is asking](#who-is-asking-for-heat) | [Requestors](#heat-requestors) · [Primary circuit](#primary-heating-circuit) · [Space heating](#space-heating-active) · [Count](#heating-circuits-requesting) · [hcN](#hcn-requesting-heat) |
 | | [DHW requested](#dhw-requested) · [DHW charging](#dhw-charging) · [DHW gap](#dhw-temperature-gap) · [Pool requested](#pool-requested) · [Pool gap](#pool-temperature-gap) |
-| [Efficiency](#efficiency) | [COP today](#cop-today) · [COP 24h](#cop-last-24h) · [COP month/year](#cop-month--year) |
+| [Efficiency](#efficiency) | [COP today](#cop-today) · [COP 24h](#cop-last-24h) · [COP month/year](#cop-month--year) · [SPF month/year](#spf-month--year) |
 | | [Backup share](#backup-heater-share-today--month--year) · [Backup used](#backup-heater-used-today) · [Hint](#heat-pump-efficiency-hint) |
 | [Last hour](#last-hour) | [Electricity](#last-hour-electricity) · [Heat](#last-hour-heat) · [Backup](#last-hour-backup-heater) |
 | [Compressor split](#compressor-time-split) | [Minutes](#compressor-minutes-today) · [Share](#compressor-share-today) |
@@ -124,26 +124,50 @@ Pool setpoint minus pool temperature (°C).
 
 ## Efficiency
 
-Source: gateway `recordings/.../energyMonitoring` (hourly pull). Not HA recorder / LTS. After reload, wait for the next `:06` before expecting numbers. Chart history is only the hours the entity was numeric; see [When values appear](#when-values-appear) for the null-unit statistic cleanup.
+### COP and SPF
+
+| Metric | Formula | Backup heater | Standard style |
+| --- | --- | --- | --- |
+| **COP** | `produced / compressor` | Excluded | EN 14511 (heat pump only) |
+| **SPF** | `(produced + eheater) / consumed` | Included | SEPEMO H3 (system) |
+
+- `produced` is heat-pump + environment heat. It does **not** include backup-heater heat.
+- Backup heat ≈ eheater electricity (about 1:1), so SPF adds `eheater` on the heat side and uses full `consumed` on the electricity side.
+- Expected: **SPF ≤ COP** for the same period when the backup heater ran.
+
+**Worked example (today):** produced 49, compressor 16, eheater 1, consumed 17 → COP `49/16 = 3.06`, SPF `(49+1)/17 = 2.94`.
+
+**Sources**
+
+| Period | Inputs | Source |
+| --- | --- | --- |
+| Today / last 24h | Hourly `energyMonitoring` lists | Gateway hourly pull (~`:06`); current incomplete hour excluded. Yesterday rows are fetched so 24h survives midnight/restart. |
+| Month / year | Period totals | Gateway `*_ThisMonth_kWh` / `*_ThisYear_kWh` when present; otherwise HA stored statistics (`sum` now − `sum` at period start). Compressor month/year **always** from statistics (gateway has no series). |
+
+**Caveats**
+
+- Totals stop at the last finished hour.
+- Hours with zero output are often omitted by the gateway; they count as 0 and do not change totals.
+- Month/year values are only as complete as stored statistics after a fresh install.
+- **No SCOP sensor.** SCOP is a rated lab value (EN 14825), not measurable from field data. Compare SPF year to the heat-pump datasheet SCOP.
+
+After reload, wait for the next `:06` before expecting numbers. Chart history is only the hours the entity was numeric; see [When values appear](#when-values-appear) for the null-unit statistic cleanup.
 
 ### COP today
 
-Produced heat / compressor electricity for the **local calendar day**, excluding the current incomplete hour. Gateway hourly values typically arrive with about a **1 hour** delay, so early morning can stay empty until ~01:06.
-
-Attributes:
-
-- `produced_kwh`
-- `compressor_kwh`
+Heat-pump COP for the **local calendar day**. Attributes: `produced_kwh`, `compressor_kwh`, `source`.
 
 ### COP last 24h
 
-Same ratio over the previous **24 settled hours** (rolling window, current incomplete hour excluded). Attributes: `produced_kwh`, `compressor_kwh`.
-
-After a fresh install the window may be short until enough hourly rows have been retained across midnight.
+Same ratio over the previous **24 settled hours** (rolling window). Attributes: `produced_kwh`, `compressor_kwh`.
 
 ### COP month / year
 
-Produced heat / **consumed** electricity from Bosch period totals (no compressor month/year series). Attributes: `produced_kwh`, `consumed_kwh`.
+Same heat-pump COP for the local calendar month / year. Attributes: `produced_kwh`, `compressor_kwh`, `source` (`gateway` or `statistics`).
+
+### SPF month / year
+
+System SPF for the local calendar month / year. Attributes: `produced_kwh`, `eheater_kwh`, `consumed_kwh`, `source`.
 
 ### Backup heater share today / month / year
 

@@ -162,9 +162,12 @@ When the gateway exposes `heatSources/poolStatus`, `poolTemperature`, and `poolS
 
 Only when **Virtual heat-pump diagnostics** is on and protocol is **HTTP** (local KM200, not cloud XMPP). Entities live on the child device **Heat pump diagnostics** and are **disabled** by default.
 
-Live mode/delta/circuit sensors fill on the next 60s refresh. **COP / last-hour / efficiency hint** read gateway `energyMonitoring` (not HA history) and stay `Unknown` until the next hourly pull (~`:06`). If the COP today more-info chart stays empty while the state is numeric, remove the old null-unit statistic once under **Developer tools → Statistics**.
+Live mode/delta/circuit sensors fill on the next 60s refresh. **COP today / last 24h / last-hour / efficiency hint** need the next hourly pull (~`:06`). **COP / SPF month / year** use HA stored statistics when the gateway has no period totals.
 
-Full reference (mode states, requestors, COP, efficiency hint, compressor split): [docs/virtual-heatpump-sensors.md](docs/virtual-heatpump-sensors.md).
+- **COP** = produced / compressor (heat pump only; backup heater excluded)
+- **SPF** = (produced + eheater) / consumed (system; backup heater included)
+
+Hours with zero heat-pump output are often omitted by the gateway; they count as 0 and do not change totals. Full reference: [docs/virtual-heatpump-sensors.md](docs/virtual-heatpump-sensors.md).
 
 # Help
 

@@ -51,6 +51,20 @@ class FakeSensor:
         self.updates += 1
 
 
+class FakeConnector:
+    """Connector put that can raise."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.puts: list[tuple[str, Any]] = []
+
+    async def put(self, path: str, value: Any) -> None:
+        """Record or raise."""
+        if self.fail:
+            raise RuntimeError("rejected")
+        self.puts.append((path, value))
+
+
 class FakeGateway:
     """Gateway with sensors and optional raw_query/raw_put."""
 
@@ -58,10 +72,13 @@ class FakeGateway:
         self,
         sensors: list[Any] | None = None,
         raw: dict[str, Any] | None = None,
+        *,
+        connector: FakeConnector | None = None,
     ) -> None:
         self.sensors = sensors or []
         self.raw = {k.lstrip("/"): v for k, v in (raw or {}).items()}
         self.puts: list[tuple[str, Any]] = []
+        self._connector = connector
 
     async def raw_query(self, path: str) -> Any:
         """Return fixture value or raise."""
@@ -79,6 +96,7 @@ def test_status_to_hvac_mapping() -> None:
     """off/empty → off; anything else → heat."""
     assert pool.status_to_hvac("off") == pool.HVAC_OFF
     assert pool.status_to_hvac("OFF") == pool.HVAC_OFF
+    assert pool.status_to_hvac("stop") == pool.HVAC_OFF
     assert pool.status_to_hvac(None) == pool.HVAC_OFF
     assert pool.status_to_hvac("") == pool.HVAC_OFF
     assert pool.status_to_hvac("on") == pool.HVAC_HEAT
@@ -90,6 +108,27 @@ def test_hvac_to_status_mapping() -> None:
     assert pool.hvac_to_status(pool.HVAC_HEAT) == "on"
     assert pool.hvac_to_status(pool.HVAC_OFF) == "off"
     assert pool.hvac_to_status("HEAT") == "on"
+
+
+def test_pick_status_value_from_allowed() -> None:
+    """Prefer start/stop when those are the allowed set."""
+    assert pool.pick_status_value(True, ["start", "stop"]) == "start"
+    assert pool.pick_status_value(False, ["start", "stop"]) == "stop"
+    assert pool.pick_status_value(True, ["off", "on"]) == "on"
+    assert pool.pick_status_value(False, ["off", "on"]) == "off"
+    assert pool.pick_status_value(True, []) == "on"
+    assert pool.pick_status_value(False, None) == "off"
+
+
+def test_extract_allowed_values() -> None:
+    """Parse allowedValues from raw payloads."""
+    assert pool.extract_allowed_values(
+        {"value": "off", "allowedValues": ["off", "on"]}
+    ) == ["off", "on"]
+    assert pool.extract_allowed_values(
+        {"result": {"allowedValues": ["start", "stop"]}}
+    ) == ["start", "stop"]
+    assert pool.extract_allowed_values({"value": "off"}) == []
 
 
 def test_path_match_with_or_without_slash() -> None:
@@ -176,16 +215,65 @@ def test_poller_raw_query_fallback() -> None:
     assert pool.status_to_hvac(poller.status) == pool.HVAC_HEAT
 
 
-def test_poller_writes() -> None:
-    """Status and setpoint writes use raw_put paths."""
-    gw = FakeGateway()
+def test_poller_writes_via_connector() -> None:
+    """Status writes use connector put and allowed values."""
+    connector = FakeConnector()
+    gw = FakeGateway(
+        connector=connector,
+        raw={
+            "heatSources/poolStatus": {
+                "value": "off",
+                "allowedValues": ["off", "on"],
+            }
+        },
+    )
     poller = pool.PoolPoller(gw)
     asyncio.run(poller.async_set_status("on"))
     asyncio.run(poller.async_set_temperature(31.5))
-    assert gw.puts == [
-        ("heatSources/poolStatus", "on"),
-        ("heatSources/poolSetpointTemperature", 31.5),
+    assert connector.puts == [
+        ("/heatSources/poolStatus", "on"),
+        ("/heatSources/poolSetpointTemperature", 31.5),
     ]
+    assert poller.status == "on"
+    assert poller.target_temp == 31.5
+
+
+def test_poller_writes_start_stop_when_allowed() -> None:
+    """Write start/stop when those are the only allowed values."""
+    connector = FakeConnector()
+    gw = FakeGateway(
+        connector=connector,
+        raw={
+            "heatSources/poolStatus": {
+                "value": "stop",
+                "allowedValues": ["start", "stop"],
+            }
+        },
+    )
+    poller = pool.PoolPoller(gw)
+    asyncio.run(poller.async_set_status("on"))
+    assert connector.puts == [("/heatSources/poolStatus", "start")]
+    assert poller.status == "start"
+
+
+def test_poller_write_failure_raises() -> None:
+    """Rejected put becomes PoolWriteError."""
+    gw = FakeGateway(connector=FakeConnector(fail=True))
+    poller = pool.PoolPoller(gw)
+    try:
+        asyncio.run(poller.async_set_status("on"))
+        raise AssertionError("expected PoolWriteError")
+    except pool.PoolWriteError:
+        pass
+
+
+def test_shared_poller_reused() -> None:
+    """Climate and switch share one poller instance."""
+    gw = FakeGateway()
+    coordinator = SimpleNamespace()
+    first = pool.get_or_create_pool_poller(coordinator, gw)
+    second = pool.get_or_create_pool_poller(coordinator, gw)
+    assert first is second
 
 
 def test_extract_scalar_variants() -> None:

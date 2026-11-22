@@ -136,6 +136,29 @@ async def async_sum_before(
     return None
 
 
+async def async_period_total(
+    hass: HomeAssistant,
+    statistic_id: str,
+    start: datetime,
+    *,
+    end: datetime | None = None,
+) -> float | None:
+    """Energy total from ``start`` to the last finished hour.
+
+    Uses cumulative sums: sum(at last finished hour) - sum(before start).
+    Returns None when no end sum exists. Missing start sum counts as 0.
+    """
+    clock = end or dt_util.now()
+    cutoff = clock.replace(minute=0, second=0, microsecond=0)
+    end_sum = await async_sum_before(hass, statistic_id, cutoff)
+    if end_sum is None:
+        return None
+    start_sum = await async_sum_before(hass, statistic_id, start)
+    if start_sum is None:
+        start_sum = 0.0
+    return round(end_sum - start_sum, 2)
+
+
 async def async_clear_statistics_range(
     hass: HomeAssistant,
     statistic_ids: list[str],

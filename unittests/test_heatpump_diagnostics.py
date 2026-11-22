@@ -613,3 +613,61 @@ def test_source_objects_skip_circuits_and_noise() -> None:
     assert noise.path not in paths
     assert child.path not in paths
     assert hp.is_recording_source(rec)
+
+
+def test_cop_month_year_use_compressor() -> None:
+    """Month/year COP uses compressor, not consumed."""
+    snap = hp.HeatpumpSnapshot(
+        produced_month=90.0,
+        consumed_month=40.0,
+        compressor_month=30.0,
+        eheater_month=10.0,
+        produced_year=900.0,
+        consumed_year=400.0,
+        compressor_year=300.0,
+        eheater_year=100.0,
+    )
+    assert snap.cop("month") == 3.0
+    assert snap.cop("year") == 3.0
+
+
+def test_spf_includes_eheater_both_sides() -> None:
+    """SPF = (produced + eheater) / consumed."""
+    snap = hp.HeatpumpSnapshot(
+        produced_month=49.0,
+        eheater_month=1.0,
+        consumed_month=17.0,
+        compressor_month=16.0,
+    )
+    assert snap.spf("month") == 2.94
+    assert snap.cop("month") == 3.06
+
+
+def test_zero_hours_absent_do_not_change_totals() -> None:
+    """Missing zero-output hours leave the day sum unchanged."""
+    data = {
+        "recordings/heatSources/total/energyMonitoring/outputProduced": [
+            {"d": "2026-11-22T03:00:00", "value": 6},
+            {"d": "2026-11-22T04:00:00", "value": 8},
+            {"d": "2026-11-22T05:00:00", "value": 8},
+            {"d": "2026-11-22T06:00:00", "value": 10},
+            {"d": "2026-11-22T07:00:00", "value": 11},
+            {"d": "2026-11-22T08:00:00", "value": 6},
+        ],
+        "recordings/heatSources/total/energyMonitoring/compressor": [
+            {"d": "2026-11-22T03:00:00", "value": 2},
+            {"d": "2026-11-22T04:00:00", "value": 2},
+            {"d": "2026-11-22T05:00:00", "value": 2},
+            {"d": "2026-11-22T06:00:00", "value": 3},
+            {"d": "2026-11-22T07:00:00", "value": 5},
+            {"d": "2026-11-22T08:00:00", "value": 2},
+        ],
+    }
+    snap = hp.build_snapshot_from_path_map(
+        data, now=datetime(2026, 11, 22, 9, 6, 0)
+    )
+    assert snap.produced_today == 49.0
+    assert snap.compressor_today == 16.0
+    assert snap.cop("today") == 3.06
+    # Without yesterday rows, 24h equals today.
+    assert snap.cop("last_24h") == snap.cop("today")

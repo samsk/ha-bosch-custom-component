@@ -93,12 +93,15 @@ class HeatpumpSnapshot:
     eheater_month: float | None = None
     eheater_year: float | None = None
     compressor_today: float | None = None
+    compressor_month: float | None = None
+    compressor_year: float | None = None
     produced_last_24h: float | None = None
     compressor_last_24h: float | None = None
     last_hour_electricity: float | None = None
     last_hour_heat: float | None = None
     last_hour_eheater: float | None = None
     last_hour_compressor: float | None = None
+    period_source: dict[str, str | None] = field(default_factory=dict)
 
     @property
     def is_heatpump(self) -> bool:
@@ -246,19 +249,31 @@ class HeatpumpSnapshot:
     def cop(self, period: str) -> float | None:
         """COP for today/last_24h/month/year.
 
-        Today and last 24h use compressor kWh (IVA heat-pump slice). Month/year
-        still use consumed electricity (no compressor period totals).
+        Heat-pump only: produced / compressor (backup heater excluded).
         """
-        if period == "today":
-            return self._ratio(self.produced_today, self.compressor_today)
-        if period == "last_24h":
-            return self._ratio(self.produced_last_24h, self.compressor_last_24h)
         mapping = {
-            "month": (self.produced_month, self.consumed_month),
-            "year": (self.produced_year, self.consumed_year),
+            "today": (self.produced_today, self.compressor_today),
+            "last_24h": (self.produced_last_24h, self.compressor_last_24h),
+            "month": (self.produced_month, self.compressor_month),
+            "year": (self.produced_year, self.compressor_year),
         }
-        produced, consumed = mapping[period]
-        return self._ratio(produced, consumed)
+        produced, compressor = mapping[period]
+        return self._ratio(produced, compressor)
+
+    def spf(self, period: str) -> float | None:
+        """System SPF for month/year.
+
+        (produced + eheater) / consumed. Backup heater included on both sides.
+        """
+        mapping = {
+            "month": (self.produced_month, self.eheater_month, self.consumed_month),
+            "year": (self.produced_year, self.eheater_year, self.consumed_year),
+        }
+        produced, eheater, consumed = mapping[period]
+        if produced is None:
+            return None
+        heat = produced + (eheater or 0.0)
+        return self._ratio(heat, consumed)
 
     def backup_share(self, period: str) -> float | None:
         """E-heater share of consumed electricity (0-1)."""

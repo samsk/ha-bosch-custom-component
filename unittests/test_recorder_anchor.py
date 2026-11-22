@@ -77,3 +77,66 @@ async def test_async_sum_before_ignores_row_at_before(monkeypatch) -> None:
         hass, "recording:rcompressorexternal", before
     )
     assert total is None
+
+
+@pytest.mark.asyncio
+async def test_async_period_total_subtracts_start(monkeypatch) -> None:
+    """Period total is end sum minus start sum."""
+    from custom_components.bosch import recorder_compat as rc
+
+    start = datetime(2026, 11, 1, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 11, 22, 9, 30, tzinfo=timezone.utc)
+
+    async def fake_sum_before(_hass, _sid, before):
+        if before == start:
+            return 100.0
+        # last finished hour cutoff = 09:00
+        if before.hour == 9:
+            return 149.0
+        return None
+
+    monkeypatch.setattr(rc, "async_sum_before", fake_sum_before)
+    total = await rc.async_period_total(
+        MagicMock(), "recording:routputproducedexternal", start, end=now
+    )
+    assert total == 49.0
+
+
+@pytest.mark.asyncio
+async def test_async_period_total_missing_end_is_none(monkeypatch) -> None:
+    """No end sum → None."""
+    from custom_components.bosch import recorder_compat as rc
+
+    async def fake_sum_before(_hass, _sid, _before):
+        return None
+
+    monkeypatch.setattr(rc, "async_sum_before", fake_sum_before)
+    total = await rc.async_period_total(
+        MagicMock(),
+        "recording:routputproducedexternal",
+        datetime(2026, 11, 1, tzinfo=timezone.utc),
+        end=datetime(2026, 11, 22, 9, 0, tzinfo=timezone.utc),
+    )
+    assert total is None
+
+
+@pytest.mark.asyncio
+async def test_async_period_total_missing_start_counts_zero(monkeypatch) -> None:
+    """Missing start sum is treated as 0."""
+    from custom_components.bosch import recorder_compat as rc
+
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    now = datetime(2026, 11, 22, 9, 30, tzinfo=timezone.utc)
+
+    async def fake_sum_before(_hass, _sid, before):
+        if before == start:
+            return None
+        if before.hour == 9:
+            return 20.0
+        return None
+
+    monkeypatch.setattr(rc, "async_sum_before", fake_sum_before)
+    total = await rc.async_period_total(
+        MagicMock(), "recording:routputproducedexternal", start, end=now
+    )
+    assert total == 20.0

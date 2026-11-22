@@ -19,7 +19,18 @@ from .const import (
     SWITCH,
     UUID,
 )
+from .pool import (
+    PoolWriteError,
+    async_pool_available,
+    get_or_create_pool_poller,
+    status_to_hvac,
+    HVAC_HEAT,
+)
 from homeassistant.components.switch import SwitchEntity
+from homeassistant.core import callback
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -63,6 +74,14 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
                         is_enabled=switch.attr_id in enabled_switches,
                     )
                 )
+    if await async_pool_available(entry.gateway):
+        entities.append(
+            BoschPoolHeatingSwitch(
+                coordinator=coordinator,
+                uuid=uuid,
+                gateway=entry.gateway,
+            )
+        )
     async_add_entities(entities)
     return True
 
@@ -130,3 +149,78 @@ class CircuitSwitch(BoschBaseSwitch):
     @property
     def device_name(self):
         return CIRCUITS_SENSOR_NAMES[self._circuit_type] + " " + self._domain_name
+
+
+class BoschPoolHeatingSwitch(CoordinatorEntity, SwitchEntity):
+    """One-tap pool heating on/off, shared with pool climate."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Pool heating"
+    _attr_entity_registry_enabled_default = True
+
+    def __init__(
+        self,
+        coordinator: BoschDataUpdateCoordinator,
+        uuid: str,
+        gateway: Any,
+    ) -> None:
+        """Bind shared pool poller."""
+        super().__init__(coordinator)
+        self._uuid = uuid
+        self._gateway = gateway
+        self._poller = get_or_create_pool_poller(coordinator, gateway)
+        self._attr_unique_id = f"{uuid}pool_heating"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Child Pool device under the gateway."""
+        info = DeviceInfo(
+            identifiers={(DOMAIN, f"{self._uuid}_pool")},
+            name="Pool",
+            manufacturer=self._gateway.device_model,
+            model=self._gateway.device_type,
+            sw_version=self._gateway.firmware,
+            hw_version=self._uuid,
+        )
+        if self.coordinator.gateway_device_id:
+            info["via_device_id"] = self.coordinator.gateway_device_id
+        return info
+
+    async def async_added_to_hass(self) -> None:
+        """Register shared poller and seed values."""
+        await super().async_added_to_hass()
+        self.coordinator.register_object(self._poller)
+        await self._poller.update()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister shared poller."""
+        self.coordinator.unregister_object(self._poller)
+        await super().async_will_remove_from_hass()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Refresh switch state from poller."""
+        super()._handle_coordinator_update()
+
+    @property
+    def is_on(self) -> bool:
+        """True when pool heating is requested."""
+        return status_to_hvac(self._poller.status) == HVAC_HEAT
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn pool heating on."""
+        try:
+            await self._poller.async_set_status("on")
+        except PoolWriteError as err:
+            raise HomeAssistantError(f"Failed to turn pool heating on: {err}") from err
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn pool heating off."""
+        try:
+            await self._poller.async_set_status("off")
+        except PoolWriteError as err:
+            raise HomeAssistantError(f"Failed to turn pool heating off: {err}") from err
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()

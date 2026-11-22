@@ -226,15 +226,28 @@ class BoschDataUpdateCoordinator(TimestampDataUpdateCoordinator):
                 async with asyncio.TaskGroup() as tg:
                     for obj in objects.values():
                         tg.create_task(self._async_update_object(obj, time=now))
+                # Yesterday rows keep rolling 24h COP after midnight/restart.
+                yesterday = now - timedelta(days=1)
+                energy_objs = [
+                    obj for obj in objects.values() if _is_energy_monitoring(obj)
+                ]
+                if energy_objs:
+                    async with asyncio.TaskGroup() as tg:
+                        for obj in energy_objs:
+                            tg.create_task(
+                                self._async_update_object(obj, time=yesterday)
+                            )
                 async with asyncio.TaskGroup() as tg:
                     for entity in entities:
                         tg.create_task(self._async_push_recording_entity(entity))
                 _LOGGER.debug("Bosch 1-hour entities updated.")
             from .degree_hours import async_update_hdh_tail
             from .environment_energy import async_update_environment_tail
+            from .heatpump_period import async_refresh_period_totals
 
             await async_update_environment_tail(self.hass)
             await async_update_hdh_tail(self.hass)
+            await async_refresh_period_totals(self.hass, self)
             # Refresh virtual COP / diagnostics that read recording objects.
             # async_set_updated_data does not bump last_update_success_time.
             self.last_update_success_time = dt_util.utcnow()
