@@ -5,11 +5,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from functools import partial
 from typing import Any
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticMetaData
-from homeassistant.components.recorder.statistics import statistics_during_period
+from homeassistant.components.recorder.statistics import (
+    async_update_statistics_metadata,
+    get_metadata,
+    statistics_during_period,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
@@ -89,6 +94,51 @@ def build_external_statistic_metadata(
     if _supports_has_mean():
         meta["has_mean"] = False
     return StatisticMetaData(**meta)
+
+
+async def async_align_statistic_unit(
+    hass: HomeAssistant,
+    statistic_id: str,
+    unit: str | None,
+) -> bool:
+    """Align LTS metadata unit with the entity; no-op if missing or matching.
+
+    Returns True when an update was queued. Does not clear or rewrite rows.
+    """
+    expected_unit = unit
+    expected_class = unit_class_for(unit)
+    metas = await get_instance(hass).async_add_executor_job(
+        partial(get_metadata, hass, statistic_ids={statistic_id})
+    )
+    if statistic_id not in metas:
+        return False
+    meta = metas[statistic_id][1]
+    stored_unit = meta.get("unit_of_measurement")
+    stored_class = meta.get("unit_class")
+    if stored_unit == expected_unit and stored_class == expected_class:
+        return False
+    _LOGGER.info(
+        "Aligning statistic %s unit %r/%r -> %r/%r",
+        statistic_id,
+        stored_unit,
+        stored_class,
+        expected_unit,
+        expected_class,
+    )
+    try:
+        async_update_statistics_metadata(
+            hass,
+            statistic_id,
+            new_unit_of_measurement=expected_unit,
+            new_unit_class=expected_class,
+        )
+    except TypeError:
+        async_update_statistics_metadata(
+            hass,
+            statistic_id,
+            new_unit_of_measurement=expected_unit,
+        )
+    return True
 
 
 async def async_sum_before(

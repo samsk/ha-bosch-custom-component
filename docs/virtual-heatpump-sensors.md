@@ -23,7 +23,7 @@ Two refresh paths:
 
 **COP today / last 24h** read live `energyMonitoring` hourly lists. After a reload those objects are empty until the hourly pull runs, so they stay `Unknown` until then (up to about an hour). **COP / SPF month / year** also use HA stored statistics when the gateway has no period totals.
 
-The more-info chart uses recorder long-term statistics for the entity. It only has points for hours when the entity was numeric (no backfill). All COP sensors use unit `""`. If an older `sensor.heat_pump_diagnostics_cop_today` statistic was registered with unit `null`, new states will not attach — remove that statistic once under **Developer tools → Statistics**, then let HA recreate it from the live entity.
+The more-info chart uses recorder long-term statistics for the entity. It only has points for hours when the entity was numeric (no backfill). All COP sensors use unit `""`. On load the integration realigns the COP today statistic unit when an older `null` / `unitless` registration does not match; the graph fills from the next recorder compile (hours that were skipped are not backfilled).
 
 ## Sensors
 
@@ -153,7 +153,7 @@ Pool setpoint minus pool temperature (°C).
 - **No SCOP sensor.** SCOP is a rated lab value (EN 14825), not measurable from field data. Compare SPF year to the heat-pump datasheet SCOP.
 - All COP / SPF entities are **disabled by default**; enable them on the Heat pump diagnostics device.
 
-After reload, wait for the next `:06` before expecting numbers. Chart history is only the hours the entity was numeric; see [When values appear](#when-values-appear) for the null-unit statistic cleanup.
+After reload, wait for the next `:06` before expecting numbers. Chart history is only the hours the entity was numeric; see [When values appear](#when-values-appear) for LTS unit realignment.
 
 ### COP today
 

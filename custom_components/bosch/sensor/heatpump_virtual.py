@@ -41,6 +41,7 @@ from ..heatpump_diagnostics import (
 from ..heatpump_period import apply_period_totals, period_totals
 from ..heatpump_snapshot_cache import SNAPSHOT_ATTR, get_or_build_snapshot
 from ..heatpump_split import HeatpumpSplitAccumulator
+from ..recorder_compat import async_align_statistic_unit
 
 if TYPE_CHECKING:
     from ..coordinator import BoschDataUpdateCoordinator
@@ -385,6 +386,16 @@ class HeatpumpNumericSensor(_HeatpumpVirtualBase, SensorEntity):
         self._attr_state_class = state_class
         if device_class:
             self._attr_device_class = device_class
+
+    async def async_added_to_hass(self) -> None:
+        """Register sources and align LTS unit with the entity."""
+        await super().async_added_to_hass()
+        if self.entity_id:
+            await async_align_statistic_unit(
+                self.hass,
+                self.entity_id,
+                self.native_unit_of_measurement,
+            )
 
     @property
     def native_value(self) -> float | None:
