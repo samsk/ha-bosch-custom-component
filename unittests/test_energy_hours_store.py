@@ -47,6 +47,11 @@ async def test_energy_hours_keeps_yesterday_and_today(monkeypatch) -> None:
         "custom_components.bosch.coordinator.TimestampDataUpdateCoordinator.__init__",
         lambda self, *a, **k: None,
     )
+    # Pin merge clock so the 48h prune does not depend on CI wall time.
+    clock = datetime(2026, 11, 22, 10, 6, 0)
+    monkeypatch.setattr(
+        "custom_components.bosch.coordinator.dt_util.now", lambda: clock
+    )
     coord = BoschDataUpdateCoordinator.__new__(BoschDataUpdateCoordinator)
     coord.energy_hours = {}
     coord.hass = MagicMock()
@@ -77,6 +82,10 @@ async def test_empty_pull_keeps_stored_hours(monkeypatch) -> None:
     monkeypatch.setattr(
         "custom_components.bosch.coordinator.TimestampDataUpdateCoordinator.__init__",
         lambda self, *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "custom_components.bosch.coordinator.dt_util.now",
+        lambda: datetime(2026, 11, 22, 10, 0, 0),
     )
     coord = BoschDataUpdateCoordinator.__new__(BoschDataUpdateCoordinator)
     coord.energy_hours = {}
