@@ -127,6 +127,8 @@ Pool setpoint minus pool temperature (°C).
 
 ### COP and SPF
 
+These are ratios of **energy totals**, not a mean of hourly COP values (a mean would weight a 1 kWh hour the same as a 10 kWh hour).
+
 | Metric | Formula | Backup heater | Standard style |
 | --- | --- | --- | --- |
 | **COP** | `produced / compressor` | Excluded | EN 14511 (heat pump only) |
@@ -135,6 +137,7 @@ Pool setpoint minus pool temperature (°C).
 - `produced` is heat-pump + environment heat. It does **not** include backup-heater heat.
 - Backup heat ≈ eheater electricity (about 1:1), so SPF adds `eheater` on the heat side and uses full `consumed` on the electricity side.
 - Expected: **SPF ≤ COP** for the same period when the backup heater ran.
+- If compressor (COP) or consumed (SPF) in the period is 0, the sensor is `unknown`, not 0.
 
 **Worked example (today):** produced 49, compressor 16, eheater 1, consumed 17 → COP `49/16 = 3.06`, SPF `(49+1)/17 = 2.94`.
 
@@ -142,14 +145,15 @@ Pool setpoint minus pool temperature (°C).
 
 | Period | Inputs | Source |
 | --- | --- | --- |
-| Today / last 24h | Hourly `energyMonitoring` lists | Gateway hourly pull (~`:06`); current incomplete hour excluded. Yesterday + today are merged in a coordinator store (library `state` is read-only). |
+| Today | Local calendar-day hourly lists | Gateway hourly pull (~`:06`); current incomplete hour excluded. Yesterday + today are merged in a coordinator store (library `state` is read-only). Pulls use noon on the target day so a 00:00–01:00 request does not rewind. |
+| Last 24h | 24 finished hours `[current hour − 24h, current hour)` | HA stored statistics (sum of hourly `state`). List sum is only a fallback when statistics have no rows (fresh install). From 00:00–01:00 the window is still yesterday’s hours. |
 | Month / year | Period totals | Gateway `*_ThisMonth_kWh` / `*_ThisYear_kWh` when present; otherwise HA stored statistics (`sum` now − `sum` at period start). Compressor month/year **always** from statistics (gateway has no series). |
 
 **Caveats**
 
 - Totals stop at the last finished hour.
 - Hours with zero output are often omitted by the gateway; they count as 0 and do not change totals.
-- Month/year values are only as complete as stored statistics after a fresh install.
+- Month/year and last-24h values are only as complete as stored statistics after a fresh install.
 - **No SCOP sensor.** SCOP is a rated lab value (EN 14825), not measurable from field data. Compare SPF year to the heat-pump datasheet SCOP.
 - All COP / SPF entities are **disabled by default**; enable them on the Heat pump diagnostics device.
 
@@ -170,10 +174,10 @@ After reload, wait for the next `:06` before expecting numbers. Chart history is
 | | |
 | --- | --- |
 | Entity | `sensor.heat_pump_diagnostics_cop_last_24h` |
-| Formula | `produced / compressor` over 24 settled hours |
+| Formula | `produced / compressor` over 24 finished hours (not a mean of hourly COP) |
 | Unit | `""` |
-| Refresh | Hourly (~`:06`) |
-| Attributes | `produced_kwh`, `compressor_kwh` |
+| Refresh | Hourly (~`:06`) from HA statistics |
+| Attributes | `produced_kwh`, `compressor_kwh`, `source` (`statistics` or list fallback) |
 
 ### COP month / year
 
@@ -200,10 +204,11 @@ After reload, wait for the next `:06` before expecting numbers. Chart history is
 | | |
 | --- | --- |
 | Entity | `sensor.heat_pump_diagnostics_spf_last_24h` |
-| Formula | `(produced + eheater) / consumed` over 24 settled hours |
+| Formula | `(produced + eheater) / consumed` over 24 finished hours |
 | Unit | `""` |
-| Refresh | Hourly (~`:06`) |
-| Attributes | `produced_kwh`, `eheater_kwh`, `consumed_kwh`, `source` |
+| Refresh | Hourly (~`:06`) from HA statistics |
+| Attributes | `produced_kwh`, `eheater_kwh`, `consumed_kwh`, `source` (`statistics` or list fallback) |
+| Note | Disabled by default; enable on the Heat pump diagnostics device. |
 
 ### SPF month / year
 

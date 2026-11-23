@@ -24,6 +24,7 @@ Changes in this fork since [bosch-thermostat/home-assistant-bosch-custom-compone
 
 - Pool climate writes use gateway `allowedValues` and raise on failure (no silent `raw_put` swallow).
 - COP / SPF today and last 24h: merged yesterday+today hour rows live in a coordinator store (library `RecordingSensor.state` is read-only, so assigning merged state never worked). Hourly pull order is yesterday → today → LTS push so today’s rows keep flowing into stored statistics.
+- COP / SPF last 24h use HA hourly statistics for `[current hour − 24h, current hour)` so they no longer equal “today” when the gateway list is today-only; recording day pulls use noon to avoid the client `hour < 1` rewind.
 - COP month / year use produced / compressor (same as today); month/year totals fall back to HA stored statistics when the gateway has no period scalars.
 - Recording LTS **upsert**: when zero-energy hours are omitted, the cumulative `sum` no longer resets after a gap. The upsert uses the latest in-window row strictly before the change, otherwise a gap-safe recorder lookup that walks history backward. The same anchor logic applies to derived `renvironment` and HDH hourly tails and to `bosch.repair_recording_sums`.
 - Recording LTS **upsert**: supports late or corrected hourly values by rewriting changed rows and recomputing cumulative `sum` from the first change. This avoids permanently retaining an incorrect first sample.

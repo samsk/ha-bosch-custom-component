@@ -659,6 +659,7 @@ def build_heatpump_virtual_entities(
             attrs_getter=lambda s: {
                 "produced_kwh": s.produced_last_24h,
                 "compressor_kwh": s.compressor_last_24h,
+                "source": s.period_source.get("last_24h"),
             },
         )
     )

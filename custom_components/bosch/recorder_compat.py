@@ -209,6 +209,48 @@ async def async_period_total(
     return round(end_sum - start_sum, 2)
 
 
+async def async_window_total(
+    hass: HomeAssistant,
+    statistic_id: str,
+    start: datetime,
+    end: datetime,
+) -> float | None:
+    """Sum hourly statistic ``state`` for ``start <= row < end``.
+
+    Returns None when no rows fall in the window. Missing zero hours count
+    as 0 by absence (they do not change the sum).
+    """
+    start_ts = float(dt_util.as_timestamp(start))
+    end_ts = float(dt_util.as_timestamp(end))
+    raw = await get_instance(hass).async_add_executor_job(
+        statistics_during_period,
+        hass,
+        start,
+        end,
+        [statistic_id],
+        "hour",
+        None,
+        {"state"},
+    )
+    total = 0.0
+    found = False
+    for row in raw.get(statistic_id) or []:
+        ts = row.get("start")
+        if ts is None:
+            continue
+        ts_f = float(ts)
+        if ts_f < start_ts or ts_f >= end_ts:
+            continue
+        try:
+            total += float(row.get("state") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        found = True
+    if not found:
+        return None
+    return round(total, 2)
+
+
 async def async_clear_statistics_range(
     hass: HomeAssistant,
     statistic_ids: list[str],

@@ -239,20 +239,26 @@ class BoschDataUpdateCoordinator(TimestampDataUpdateCoordinator):
                 ]
                 # Yesterday first so the store merges both days; today last so
                 # the library object (and LTS push) hold today's rows.
-                yesterday = now - timedelta(days=1)
+                # Pass noon so client hour<1 rewind does not shift the date.
+                yesterday_noon = _recording_day_noon(now - timedelta(days=1))
+                today_noon = _recording_day_noon(now)
                 if energy_objs:
                     async with asyncio.TaskGroup() as tg:
                         for obj in energy_objs:
                             tg.create_task(
-                                self._async_update_object(obj, time=yesterday)
+                                self._async_update_object(obj, time=yesterday_noon)
                             )
                     async with asyncio.TaskGroup() as tg:
                         for obj in energy_objs:
-                            tg.create_task(self._async_update_object(obj, time=now))
+                            tg.create_task(
+                                self._async_update_object(obj, time=today_noon)
+                            )
                 if other_objs:
                     async with asyncio.TaskGroup() as tg:
                         for obj in other_objs:
-                            tg.create_task(self._async_update_object(obj, time=now))
+                            tg.create_task(
+                                self._async_update_object(obj, time=today_noon)
+                            )
                 async with asyncio.TaskGroup() as tg:
                     for entity in entities:
                         tg.create_task(self._async_push_recording_entity(entity))
@@ -289,6 +295,11 @@ class BoschDataUpdateCoordinator(TimestampDataUpdateCoordinator):
             self.hass, self.async_recording_sensors_update, nexti
         )
         _LOGGER.debug("Next update of 1-hour sensors scheduled at: %s", nexti)
+
+
+def _recording_day_noon(day: datetime) -> datetime:
+    """Noon on the target calendar day (avoids client hour<1 rewind)."""
+    return day.replace(hour=12, minute=0, second=0, microsecond=0)
 
 
 def _energy_hours_key(obj: BoschObject) -> str:

@@ -140,3 +140,63 @@ async def test_async_period_total_missing_start_counts_zero(monkeypatch) -> None
         MagicMock(), "recording:routputproducedexternal", start, end=now
     )
     assert total == 20.0
+
+
+@pytest.mark.asyncio
+async def test_async_window_total_sums_half_open_range(monkeypatch) -> None:
+    """Window sum includes start and excludes end; missing hours are 0."""
+    from custom_components.bosch import recorder_compat as rc
+
+    start = datetime(2026, 11, 22, 9, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 11, 23, 9, 0, tzinfo=timezone.utc)
+    # 09:00 yesterday = 46.1, 08:00 today = 62.2 → 108.3; row at end excluded.
+    rows = [
+        {"start": start.timestamp(), "state": 46.1},
+        {"start": datetime(2026, 11, 23, 8, 0, tzinfo=timezone.utc).timestamp(), "state": 62.2},
+        {"start": end.timestamp(), "state": 99.0},
+    ]
+
+    def fake_period(_hass, _start, _end, *_a, **_k):
+        return {"recording:routputproducedexternal": rows}
+
+    hass = MagicMock()
+    instance = MagicMock()
+
+    async def run_job(fn, *a, **k):
+        return fn(*a, **k)
+
+    instance.async_add_executor_job = run_job
+    monkeypatch.setattr(rc, "get_instance", lambda _h: instance)
+    monkeypatch.setattr(rc, "statistics_during_period", fake_period)
+
+    total = await rc.async_window_total(
+        hass, "recording:routputproducedexternal", start, end
+    )
+    assert total == 108.3
+
+
+@pytest.mark.asyncio
+async def test_async_window_total_empty_is_none(monkeypatch) -> None:
+    """No rows in the window → None (fresh install fallback)."""
+    from custom_components.bosch import recorder_compat as rc
+
+    def fake_period(_hass, _start, _end, *_a, **_k):
+        return {"recording:rcompressorexternal": []}
+
+    hass = MagicMock()
+    instance = MagicMock()
+
+    async def run_job(fn, *a, **k):
+        return fn(*a, **k)
+
+    instance.async_add_executor_job = run_job
+    monkeypatch.setattr(rc, "get_instance", lambda _h: instance)
+    monkeypatch.setattr(rc, "statistics_during_period", fake_period)
+
+    total = await rc.async_window_total(
+        hass,
+        "recording:rcompressorexternal",
+        datetime(2026, 11, 22, 9, 0, tzinfo=timezone.utc),
+        datetime(2026, 11, 23, 9, 0, tzinfo=timezone.utc),
+    )
+    assert total is None
